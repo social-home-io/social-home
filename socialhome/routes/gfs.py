@@ -16,11 +16,24 @@ from ..services.gfs_connection_service import GfsConnectionError
 from .base import BaseView
 
 
-def _conn_dict(conn) -> dict:
-    """Public-shape view of a :class:`GfsConnection`."""
+_DEFAULT_HEALTH: dict = {"connected": False, "last_error": None}
+
+
+def _conn_dict(conn, health: dict | None = None) -> dict:
+    """Public-shape view of a :class:`GfsConnection`.
+
+    ``status`` stays the stored PAIRING state (active/pending/suspended).
+    ``health`` carries the supervisor's LIVE WS signal — ``connected``
+    (is a socket up right now) + ``last_error`` (the last auth/close
+    reason when not connected) — so the SPA reflects real liveness rather
+    than treating a stored ``status='active'`` as "connected".
+    """
     d = asdict(conn)
     # Remove sensitive key material from the API response.
     d.pop("public_key", None)
+    h = health if health is not None else _DEFAULT_HEALTH
+    d["connected"] = bool(h.get("connected", False))
+    d["last_error"] = h.get("last_error")
     return d
 
 
@@ -45,7 +58,18 @@ class GfsConnectionCollectionView(BaseView):
             return error_response(401, "UNAUTHENTICATED", "Authentication required.")
         svc = self.svc(K.gfs_connection_service_key)
         connections = await svc.list_connections()
-        return web.json_response([_conn_dict(c) for c in connections])
+        supervisor = self.request.app.get(K.gfs_ws_supervisor_key)
+        return web.json_response(
+            [
+                _conn_dict(
+                    c,
+                    supervisor.connection_health(c.id)
+                    if supervisor is not None
+                    else None,
+                )
+                for c in connections
+            ]
+        )
 
     async def post(self) -> web.Response:
         ctx = self.user
@@ -97,7 +121,11 @@ class GfsConnectionDetailView(BaseView):
         conn = await repo.get(gfs_id)
         if conn is None:
             return error_response(404, "NOT_FOUND", "GFS connection not found.")
-        return web.json_response(_conn_dict(conn))
+        supervisor = self.request.app.get(K.gfs_ws_supervisor_key)
+        health = (
+            supervisor.connection_health(gfs_id) if supervisor is not None else None
+        )
+        return web.json_response(_conn_dict(conn, health))
 
     async def delete(self) -> web.Response:
         ctx = self.user

@@ -1200,6 +1200,123 @@ async def test_update_display_name_no_context_returns_zero(env):
     assert session.calls == []
 
 
+# ── push_display_name (single GFS, reconnect self-heal) ─────────────────
+
+
+async def test_push_display_name_signs_and_posts_to_one_gfs(env):
+    """``push_display_name`` POSTs the signed canonical
+    ``{instance_id, display_name, ts}`` body to exactly the named GFS's
+    ``/gfs/instance`` and returns True on 200. The signature verifies
+    byte-for-byte against the GFS contract — same shape as the
+    fan-out variant, but to one connection."""
+    from socialhome.crypto import b64url_decode, verify_ed25519
+
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://a.example"))
+    await repo.save(_make_conn("g2", inbox_url="https://b.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(status=200, body={"status": "ok"})
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    ok = await svc.push_display_name("g1", "Casa Vizeli")
+    assert ok is True
+    # POSTed only to g1's /gfs/instance, not g2's.
+    assert ("POST", "https://a.example/gfs/instance") in session.calls
+    assert ("POST", "https://b.example/gfs/instance") not in session.calls
+    body = session._last_body  # type: ignore[attr-defined]
+    assert body["instance_id"] == "alpha.home"
+    assert body["display_name"] == "Casa Vizeli"
+    assert body["ts"]
+    sig = body["signature"]
+    assert sig
+    canonical = json.dumps(
+        {
+            "instance_id": body["instance_id"],
+            "display_name": body["display_name"],
+            "ts": body["ts"],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert verify_ed25519(kp.public_key, canonical, b64url_decode(sig))
+
+
+async def test_push_display_name_returns_false_on_http_error(env):
+    """A non-200 (e.g. 404 from an old GFS, or a 5xx) yields False and
+    never raises."""
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://old.example"))
+    kp = generate_identity_keypair()
+    session = _StubSession(status=404)
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    ok = await svc.push_display_name("g1", "New Name")
+    assert ok is False
+
+
+async def test_push_display_name_returns_false_on_transport_error(env):
+    """A GFS raising ClientError/TimeoutError is swallowed — best-effort
+    push returns False, never propagates."""
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://err.example"))
+    kp = generate_identity_keypair()
+
+    class _ErrSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def post(self, url, **kw):
+            self.calls.append(("POST", url))
+            raise aiohttp.ClientError("boom")
+
+    session = _ErrSession()
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    ok = await svc.push_display_name("g1", "New Name")
+    assert ok is False
+    assert len(session.calls) == 1
+
+
+async def test_push_display_name_returns_false_for_unknown_gfs(env):
+    """A gfs_id with no active connection row → False, no POST."""
+    _, repo = env
+    kp = generate_identity_keypair()
+    session = _StubSession(status=200)
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    svc.attach_publish_context(
+        space_repo=None,
+        own_instance_id="alpha.home",
+        own_signing_key=kp.private_key,
+    )
+    ok = await svc.push_display_name("nope", "New Name")
+    assert ok is False
+    assert session.calls == []
+
+
+async def test_push_display_name_no_context_returns_false(env):
+    """Without publish context wired (no instance id / signing key),
+    the push is a no-op returning False — never crashes early boot."""
+    _, repo = env
+    await repo.save(_make_conn("g1", inbox_url="https://a.example"))
+    session = _StubSession(status=200)
+    svc = GfsConnectionService(repo, http_client=session)  # type: ignore[arg-type]
+    ok = await svc.push_display_name("g1", "New Name")
+    assert ok is False
+    assert session.calls == []
+
+
 async def test_publish_body_raises_when_space_missing(env):
     """``attach_publish_context`` is wired but the local space row is
     gone — a publish with no space metadata can't be signed into a valid

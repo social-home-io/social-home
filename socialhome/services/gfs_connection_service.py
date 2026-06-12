@@ -647,16 +647,14 @@ class GfsConnectionService:
                 )
         return unpublished
 
-    async def update_display_name_to_all(self, display_name: str) -> int:
-        """Push the household's new display_name to every active GFS so the
-        GFS-side client_instances row stays in sync. Best-effort: a GFS that's
-        unreachable, errors, or is too old (404 — no /gfs/instance) is logged
-        and skipped, never aborting the rename. Returns the success count."""
-        if not self._own_instance_id or not self._own_signing_key:
-            # Early boot / tests without publish context wired — nothing
-            # to sign with, so there's nothing to push.
-            return 0
+    def _build_instance_name_body(self, display_name: str) -> dict | None:
+        """Build the signed ``/gfs/instance`` body for a household-name push.
 
+        Returns ``None`` when there's no publish context wired (early boot /
+        tests) — nothing to sign with, so the caller skips the push.
+        """
+        if not self._own_instance_id or not self._own_signing_key:
+            return None
         ts = datetime.now(timezone.utc).isoformat()
         canonical = json.dumps(
             {
@@ -668,45 +666,82 @@ class GfsConnectionService:
             sort_keys=True,
         ).encode("utf-8")
         sig = b64url_encode(sign_ed25519(self._own_signing_key, canonical))
-        body = {
+        return {
             "instance_id": self._own_instance_id,
             "display_name": display_name,
             "ts": ts,
             "signature": sig,
         }
 
-        client = self._client()
+    async def _post_instance_name(self, conn: GfsConnection, body: dict) -> bool:
+        """POST a pre-signed name body to one GFS's ``/gfs/instance``.
+
+        Best-effort: a 404 (old server, no endpoint), any other non-200, or a
+        transport error is logged and turned into ``False`` — never raises.
+        Returns ``True`` only on HTTP 200.
+        """
+        url = f"{conn.inbox_url}/gfs/instance"
+        try:
+            async with self._client().post(
+                url,
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status == 200:
+                    return True
+                if resp.status == 404:
+                    log.debug(
+                        "GFS %s has no /gfs/instance (older server) —"
+                        " skipping name sync",
+                        conn.id,
+                    )
+                else:
+                    log.warning(
+                        "GFS %s rejected name sync (HTTP %d): %s",
+                        conn.id,
+                        resp.status,
+                        await resp.text(),
+                    )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            log.warning(
+                "GFS %s unreachable during name sync: %s",
+                conn.id,
+                exc,
+            )
+        return False
+
+    async def update_display_name_to_all(self, display_name: str) -> int:
+        """Push the household's new display_name to every active GFS so the
+        GFS-side client_instances row stays in sync. Best-effort: a GFS that's
+        unreachable, errors, or is too old (404 — no /gfs/instance) is logged
+        and skipped, never aborting the rename. Returns the success count."""
+        body = self._build_instance_name_body(display_name)
+        if body is None:
+            # Early boot / tests without publish context wired — nothing
+            # to sign with, so there's nothing to push.
+            return 0
         updated = 0
         for conn in await self._repo.list_active():
-            url = f"{conn.inbox_url}/gfs/instance"
-            try:
-                async with client.post(
-                    url,
-                    json=body,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status == 200:
-                        updated += 1
-                    elif resp.status == 404:
-                        log.debug(
-                            "GFS %s has no /gfs/instance (older server) —"
-                            " skipping name sync",
-                            conn.id,
-                        )
-                    else:
-                        log.warning(
-                            "GFS %s rejected name sync (HTTP %d): %s",
-                            conn.id,
-                            resp.status,
-                            await resp.text(),
-                        )
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                log.warning(
-                    "GFS %s unreachable during name sync: %s",
-                    conn.id,
-                    exc,
-                )
+            if await self._post_instance_name(conn, body):
+                updated += 1
         return updated
+
+    async def push_display_name(self, gfs_id: str, display_name: str) -> bool:
+        """Re-push the household display_name to ONE GFS (reconnect self-heal).
+
+        Used by the WS (re)connect hook so a GFS that missed an earlier rename
+        (or re-created our client row) converges back to the current name.
+        Best-effort: returns ``True`` only on HTTP 200; ``False`` for an
+        unknown/inactive connection, a missing publish context, a non-200, or
+        any transport error. Never raises.
+        """
+        body = self._build_instance_name_body(display_name)
+        if body is None:
+            return False
+        conn = await self._repo.get(gfs_id)
+        if conn is None or conn.status != "active":
+            return False
+        return await self._post_instance_name(conn, body)
 
     # ── Fraud report outbound ─────────────────────────────────────────
 

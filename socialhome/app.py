@@ -2535,6 +2535,24 @@ def create_app(config: Config | None = None) -> web.Application:
         # server (a rename typically restarts the GFS → forces a reconnect).
         async def _on_gfs_connected(gfs_id: str) -> None:
             await gfs_connection_service.refresh_connection_metadata(gfs_id)
+            # Self-heal the household name on the GFS: a rename is pushed only
+            # best-effort on edit (and never re-pushed), so a GFS that was down
+            # at rename time — or that re-created our client row — keeps showing
+            # the stale name forever. Re-push the *current* federated
+            # display_name (instance_identity self-row, the same source the
+            # pairing QR + peers use) on every (re)connect. Fail-soft: a push
+            # failure must never break the metadata refresh or key reconcile.
+            try:
+                local_identity = await federation_repo.get_local_identity()
+                current_name = (local_identity or {}).get("display_name")
+                if current_name:
+                    await gfs_connection_service.push_display_name(gfs_id, current_name)
+            except Exception:  # noqa: BLE001 — best-effort self-heal
+                log.warning(
+                    "GFS %s: re-pushing household display_name on reconnect failed",
+                    gfs_id,
+                    exc_info=True,
+                )
             # Phase 5b-c reconcile: pull this GFS's subscriber list for every
             # seed-held public/global space and re-seal the content key to each
             # — delivering keys missed while no seed-holder was online (works

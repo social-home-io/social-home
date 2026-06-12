@@ -622,6 +622,14 @@ export interface GfsConnection {
   status: 'pending' | 'active' | 'suspended'
   paired_at: string
   published_space_count: number
+  /** Live WebSocket liveness from the supervisor — distinct from the
+   *  stored ``status`` (the pairing state). True only when a socket is
+   *  actually open right now. */
+  connected?: boolean
+  /** Last auth/close reason when not connected (e.g. ``unknown-instance``,
+   *  ``bad-signature``, ``ts-skew``); null when connected or never errored.
+   *  GFS-controlled — render only via mapped strings or escaped text. */
+  last_error?: string | null
 }
 
 export interface GfsSpacePublication {

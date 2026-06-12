@@ -61,10 +61,63 @@ const gfsLoading = signal(true)
 const disconnectTarget = signal<GfsConnection | null>(null)
 
 
-function statusDotClass(status: string): string {
-  if (status === 'active' || status === 'confirmed') return 'sh-status-dot sh-status-dot--active'
-  if (status === 'suspended' || status === 'unreachable') return 'sh-status-dot sh-status-dot--unreachable'
-  return 'sh-status-dot sh-status-dot--pending'
+/** Re-pair-class auth failures: the GFS no longer recognizes this home,
+ *  so reconnecting can never succeed without re-pairing. */
+const GFS_REPAIR_ERRORS = new Set(['unknown-instance', 'bad-signature'])
+
+interface GfsLiveState {
+  /** Full ``sh-status-dot …`` class for the leading dot. */
+  dotClass: string
+  /** i18n key for the human label, or null to render no label. */
+  labelKey: string | null
+  /** CSS class for the label span (warning vs muted), or null. */
+  labelClass: string | null
+}
+
+/** Map a GFS connection's PAIRING status + LIVE WS health to what the
+ *  card should show. ``status`` is the stored pairing state; ``connected``
+ *  / ``last_error`` are the supervisor's live signal. A stored
+ *  ``status='active'`` whose socket is down must NOT read as connected —
+ *  ``last_error`` is GFS-controlled and is only ever surfaced via these
+ *  mapped, translated strings, never rendered verbatim. */
+function gfsLiveState(gfs: GfsConnection): GfsLiveState {
+  if (gfs.status === 'pending')
+    return {
+      dotClass: 'sh-status-dot sh-status-dot--pending',
+      labelKey: 'gfs.status_pending',
+      labelClass: 'sh-text-warning',
+    }
+  if (gfs.status === 'suspended')
+    return {
+      dotClass: 'sh-status-dot sh-status-dot--unreachable',
+      labelKey: 'gfs.status_suspended',
+      labelClass: 'sh-muted',
+    }
+  // status === 'active' — defer to live WS liveness.
+  if (gfs.connected)
+    return {
+      dotClass: 'sh-status-dot sh-status-dot--active',
+      labelKey: 'gfs.status_connected',
+      labelClass: 'sh-muted',
+    }
+  if (gfs.last_error && GFS_REPAIR_ERRORS.has(gfs.last_error))
+    return {
+      dotClass: 'sh-status-dot sh-status-dot--unreachable',
+      labelKey: 'gfs.status_repair_needed',
+      labelClass: 'sh-text-warning',
+    }
+  if (gfs.last_error === 'ts-skew')
+    return {
+      dotClass: 'sh-status-dot sh-status-dot--unreachable',
+      labelKey: 'gfs.status_clock_skew',
+      labelClass: 'sh-text-warning',
+    }
+  // Transient / reconnecting (any other reason, or none recorded yet).
+  return {
+    dotClass: 'sh-status-dot sh-status-dot--pending',
+    labelKey: 'gfs.status_reconnecting',
+    labelClass: 'sh-muted',
+  }
 }
 
 function hfsStatusDotClass(conn: Connection): string {
@@ -463,19 +516,17 @@ export default function ConnectionsPage() {
           </div>
         ) : (
           <div class="sh-connection-list">
-            {gfsConnections.value.map(gfs => (
+            {gfsConnections.value.map(gfs => {
+              const live = gfsLiveState(gfs)
+              return (
               <div key={gfs.id} class="sh-connection-card">
                 <div class="sh-connection-info">
-                  <span class={statusDotClass(gfs.status)} />
+                  <span class={live.dotClass} />
                   <strong>{gfs.display_name}</strong>
                   <span class="sh-type-badge">Global Server</span>
-                  {gfs.status !== 'active' && (
-                    <span class={gfs.status === 'pending' ? 'sh-text-warning' : 'sh-muted'}>
-                      {gfs.status === 'pending'
-                        ? t('gfs.status_pending')
-                        : gfs.status === 'suspended'
-                          ? t('gfs.status_suspended')
-                          : gfs.status}
+                  {live.labelKey && (
+                    <span class={live.labelClass ?? 'sh-muted'}>
+                      {t(live.labelKey)}
                     </span>
                   )}
                   <span class="sh-muted">{gfs.inbox_url}</span>
@@ -487,7 +538,8 @@ export default function ConnectionsPage() {
                   </Button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </section>

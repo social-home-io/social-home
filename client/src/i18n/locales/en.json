@@ -296,6 +296,10 @@
   "gfs.pending_toast": "Request sent — awaiting approval",
   "gfs.status_pending": "Pending approval",
   "gfs.status_suspended": "Suspended",
+  "gfs.status_connected": "Connected",
+  "gfs.status_reconnecting": "Reconnecting…",
+  "gfs.status_repair_needed": "Disconnected — re-pair needed",
+  "gfs.status_clock_skew": "Disconnected — clock out of sync",
 
   "space.federation": "Federation",
   "space.publish_to_gfs": "Publish to GFS",

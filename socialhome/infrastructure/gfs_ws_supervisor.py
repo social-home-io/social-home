@@ -163,6 +163,21 @@ class GfsWebSocketSupervisor:
     def is_running(self, gfs_id: str) -> bool:
         return gfs_id in self._clients
 
+    def connection_health(self, gfs_id: str) -> dict:
+        """Live WS liveness for one pairing, for the connections UI.
+
+        Distinct from the stored ``gfs_connections.status`` (the pairing
+        state): this reflects whether a WebSocket is actually open right
+        now and, if not, the last auth/close reason the GFS gave. A
+        ``status='active'`` pairing whose socket is rejected/down reads
+        as ``connected=False`` here so the SPA can stop showing it as
+        "connected".
+        """
+        client = self._clients.get(gfs_id)
+        if client is None:
+            return {"connected": False, "last_error": None}
+        return {"connected": client.connected, "last_error": client.last_auth_error}
+
     # ─── Reconciliation ───────────────────────────────────────────────────
 
     async def _loop(self) -> None:
@@ -186,10 +201,22 @@ class GfsWebSocketSupervisor:
         active_ids = {c.id for c in active}
         async with self._lock:
             current_ids = set(self._clients.keys())
-        to_start = [c for c in active if c.id not in current_ids]
+            # A client present in the map but whose background loop task has
+            # died (uncaught error / cancellation) is NOT running — restart it
+            # even though its pairing is still active. Without this, a dead
+            # loop would be treated as "running" forever (defense-in-depth).
+            dead_ids = {gid for gid, c in self._clients.items() if not c.is_alive()}
+        # Start = newly-active OR present-but-dead (``_start_client`` stops the
+        # stale instance before replacing it, so a dead client is restarted).
+        to_start = [c for c in active if c.id not in current_ids or c.id in dead_ids]
         to_stop_ids = current_ids - active_ids
 
         for conn in to_start:
+            if conn.id in dead_ids:
+                log.warning(
+                    "gfs.ws.supervisor: restarting dead client gfs_id=%s",
+                    conn.id,
+                )
             await self._start_client(conn)
         for gfs_id in to_stop_ids:
             await self._stop_client(gfs_id)
