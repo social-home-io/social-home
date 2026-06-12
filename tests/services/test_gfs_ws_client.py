@@ -81,6 +81,9 @@ class _FakeGfsServer:
         self.outbound: asyncio.Queue[dict] = asyncio.Queue()
         self.close_first_connect: bool = False
         self.close_code: int = 4401
+        self.close_message: bytes = b"reject"
+        # When True, EVERY connect's hello is closed (not just the first).
+        self.always_close: bool = False
 
     async def handler(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -88,8 +91,8 @@ class _FakeGfsServer:
         self.connect_count += 1
         msg = await ws.receive(timeout=5)
         self.hellos.append(json.loads(msg.data))
-        if self.close_first_connect and self.connect_count == 1:
-            await ws.close(code=self.close_code, message=b"reject")
+        if self.always_close or (self.close_first_connect and self.connect_count == 1):
+            await ws.close(code=self.close_code, message=self.close_message)
             return ws
         self.last_ws = ws
         # Drain queued outbound frames for the duration of the connection.
@@ -855,3 +858,153 @@ async def test_on_text_server_info_updated_without_hook_is_noop():
     await client._on_text(
         json.dumps({"type": "server_info_updated", "server_name": "Y"})
     )
+
+
+# ── Auth-close detection (4401) + backoff ──────────────────────────────────────
+
+
+async def test_client_sets_last_auth_error_on_4401(fake_gfs, http_session):
+    """A server-initiated 4401 close surfaces the GFS reason on
+    ``last_auth_error`` — under the bug the close is never detected so this
+    stays ``None`` forever."""
+    seed, _pub = _gen_keypair()
+    fake_gfs.always_close = True
+    fake_gfs.close_code = 4401
+    fake_gfs.close_message = b"unknown-instance"
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-ae",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        reconnect_delays=(0.05, 0.1),
+    )
+    await client.start()
+    try:
+        for _ in range(200):
+            if client.last_auth_error is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert client.last_auth_error == "unknown-instance"
+    finally:
+        await client.stop()
+
+
+async def test_client_backs_off_on_repeated_auth_rejection(fake_gfs, http_session):
+    """An always-rejecting GFS must NOT be hammered ~1/min-delay — the loop
+    takes the auth-failure path (so ``attempt`` keeps growing and the backoff
+    widens) instead of resetting to the floor delay every time."""
+    seed, _pub = _gen_keypair()
+    fake_gfs.always_close = True
+    fake_gfs.close_code = 4401
+    fake_gfs.close_message = b"unknown-instance"
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-bo",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        reconnect_delays=(0.05, 0.1, 0.2),
+    )
+    await client.start()
+    try:
+        # Wait until the auth-failure path has been taken at least once.
+        for _ in range(200):
+            if client.last_auth_error is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert client.last_auth_error == "unknown-instance"
+
+        # Observe a ~1.5s window. With growing backoff (0.05→0.1→0.2 then
+        # clamped at 0.2) the worst case is ~1 connect / 0.2s ≈ 8 connects.
+        # Under the bug (attempt reset → 0.05s floor) it would be ~30. Assert
+        # a bound comfortably between the two so timing jitter can't flip it.
+        start = fake_gfs.connect_count
+        await asyncio.sleep(1.5)
+        delta = fake_gfs.connect_count - start
+        assert delta <= 15, f"too many reconnects ({delta}) — backoff not applied"
+    finally:
+        await client.stop()
+
+
+async def test_client_clean_close_reconnects_promptly(fake_gfs, http_session):
+    """A normal (1000) server close is NOT an auth failure — the client
+    resets backoff and reconnects fast, ending up connected. Guards that the
+    auth-close fix didn't turn every disconnect into a backoff."""
+    seed, _pub = _gen_keypair()
+    fake_gfs.close_first_connect = True
+    fake_gfs.close_code = 1000
+    fake_gfs.close_message = b"bye"
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-cc",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        reconnect_delays=(0.05,),
+    )
+    await client.start()
+    try:
+        for _ in range(200):
+            if fake_gfs.connect_count >= 2 and client.connected:
+                break
+            await asyncio.sleep(0.02)
+        assert fake_gfs.connect_count >= 2
+        assert client.connected
+        # A clean close is not an auth failure.
+        assert client.last_auth_error is None
+    finally:
+        await client.stop()
+
+
+async def test_client_last_auth_error_clears_on_successful_connect(
+    fake_gfs, http_session
+):
+    """After a rejected attempt sets ``last_auth_error``, flipping the server
+    to accept must clear it once the session is live."""
+    seed, _pub = _gen_keypair()
+    fake_gfs.always_close = True
+    fake_gfs.close_code = 4401
+    fake_gfs.close_message = b"unknown-instance"
+
+    async def on_relay(frame: dict) -> None:
+        pass
+
+    client = GfsWebSocketClient(
+        gfs_url=fake_gfs.url,
+        instance_id="sh-clear",
+        signing_key=seed,
+        session_factory=lambda: http_session,
+        on_relay=on_relay,
+        reconnect_delays=(0.05,),
+    )
+    await client.start()
+    try:
+        for _ in range(200):
+            if client.last_auth_error is not None:
+                break
+            await asyncio.sleep(0.02)
+        assert client.last_auth_error == "unknown-instance"
+
+        # Flip the server to accept; the next connect succeeds.
+        fake_gfs.always_close = False
+        for _ in range(200):
+            if client.connected and client.last_auth_error is None:
+                break
+            await asyncio.sleep(0.02)
+        assert client.connected
+        assert client.last_auth_error is None
+    finally:
+        await client.stop()

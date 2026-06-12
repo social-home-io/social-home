@@ -39,6 +39,12 @@ log = logging.getLogger(__name__)
 
 RECONNECT_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 30.0)
 
+# WebSocket close codes the GFS uses to reject a hello (see
+# ``global_server/routes/ws.py``): auth failure / hello timeout / protocol
+# violation. A close with one of these codes means re-pairing or a config
+# fix is required — the loop must back off, not reset its retry counter.
+_AUTH_CLOSE_CODES: frozenset[int] = frozenset({4401, 4408, 4400})
+
 
 def _to_ws_url(http_url: str) -> str:
     """Convert ``http(s)://host`` to the matching ``ws(s)://host/gfs/ws``."""
@@ -74,6 +80,7 @@ class GfsWebSocketClient:
         "_stop",
         "_task",
         "_connected_event",
+        "last_auth_error",
     )
 
     def __init__(
@@ -107,6 +114,12 @@ class GfsWebSocketClient:
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._connected_event = asyncio.Event()
+        # Last GFS-supplied reason for an auth-related close (e.g.
+        # "unknown-instance", "bad-signature"). ``None`` while the link is
+        # healthy; set on a 4401/4408/4400 close so the supervisor/UI can
+        # surface "re-pair may be required" instead of a silent reconnect
+        # hammer. Cleared once a session is confirmed live.
+        self.last_auth_error: str | None = None
 
     def attach_highlight_signal_handler(
         self,
@@ -212,10 +225,15 @@ class GfsWebSocketClient:
                 # we want to come back up.
                 attempt = 0
             except _GfsWsAuthFailure as exc:
+                # Persist the reason for the supervisor/UI, then fall through
+                # WITHOUT resetting ``attempt`` so the backoff keeps widening
+                # — an always-rejecting GFS must not be hammered.
+                self.last_auth_error = exc.reason or f"code={exc.code}"
                 log.warning(
-                    "gfs.ws.client: auth rejected by %s: %s — backing off",
+                    "gfs.ws.client: auth rejected by %s — %s (re-pair may be "
+                    "required); backing off",
                     self._gfs_url,
-                    exc,
+                    self.last_auth_error,
                 )
             except Exception as exc:
                 log.info(
@@ -255,22 +273,55 @@ class GfsWebSocketClient:
                         self._gfs_url,
                         exc,
                     )
+            # Explicit ``receive()`` loop (not ``async for``): a
+            # server-initiated close ends ``async for`` WITHOUT yielding a
+            # CLOSE message, so the auth-close code was never observed and the
+            # loop reconnected at the floor delay forever. ``receive()`` yields
+            # the CLOSE/CLOSING/CLOSED frame whose ``.extra`` carries the GFS's
+            # reason string and whose ``ws.close_code`` is the auth code.
             try:
-                async for msg in ws:
+                auth_window_open = self.last_auth_error is not None
+                while not self._stop.is_set():
+                    if auth_window_open:
+                        # The GFS rejects a bad hello within milliseconds. If
+                        # nothing (frame OR close) arrives within the grace
+                        # window, the hello was accepted — clear the stale
+                        # reason. This avoids depending on the GFS proactively
+                        # sending a frame (it may stay quiet on a healthy link).
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=0.5)
+                        except asyncio.TimeoutError:
+                            self.last_auth_error = None
+                            auth_window_open = False
+                            continue
+                    else:
+                        msg = await ws.receive()
                     if msg.type == aiohttp.WSMsgType.TEXT:
+                        # A real frame proves the GFS accepted the hello — the
+                        # auth window is closed, so clear any stale reason.
+                        self.last_auth_error = None
+                        auth_window_open = False
                         await self._on_text(msg.data)
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSE,
+                        aiohttp.WSMsgType.CLOSING,
+                        aiohttp.WSMsgType.CLOSED,
+                    ):
+                        code = ws.close_code
+                        if code in _AUTH_CLOSE_CODES:
+                            extra = getattr(msg, "extra", None)
+                            reason = extra if isinstance(extra, str) else None
+                            raise _GfsWsAuthFailure(code, reason)
+                        # Clean / normal close → let the caller reset backoff
+                        # and reconnect promptly.
+                        self.last_auth_error = None
+                        break
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         log.warning(
                             "gfs.ws.client: socket error on %s: %s",
                             self._gfs_url,
                             ws.exception(),
                         )
-                        break
-                    elif msg.type == aiohttp.WSMsgType.CLOSE:
-                        if ws.close_code in (4401, 4408, 4400):
-                            raise _GfsWsAuthFailure(
-                                f"server-closed code={ws.close_code}",
-                            )
                         break
             finally:
                 self._connected_event.clear()
@@ -400,4 +451,14 @@ class GfsWebSocketClient:
 
 
 class _GfsWsAuthFailure(Exception):
-    """Raised when the GFS closes the connection with an auth-related code."""
+    """Raised when the GFS closes the connection with an auth-related code.
+
+    Carries the close ``code`` (one of :data:`_AUTH_CLOSE_CODES`) and the
+    GFS-supplied ``reason`` string (e.g. ``"unknown-instance"``,
+    ``"bad-signature"``) so the loop can surface it on ``last_auth_error``.
+    """
+
+    def __init__(self, code: int | None, reason: str | None) -> None:
+        self.code = code
+        self.reason = reason
+        super().__init__(f"server-closed code={code} reason={reason!r}")
