@@ -314,10 +314,11 @@ throwaway identity at startup, so the endpoint validates the Kit, wipes the
 throwaway trust rows, restores the Kit's, marks setup complete, and triggers
 a process restart so the restored identity/KEK load cleanly. Because the same
 Ed25519 key returns, the first post-restart boot fans a signed `URL_UPDATED`
-out to every restored peer (`services/recovery_reconnect_service.py`, one-shot
-guarded by a `recovery.recovered_at` marker) so peers re-point at the possibly-
-new inbox URL; the §4.4 sync below then re-pulls content over the
-re-established transport.
+out to every restored peer (`services/recovery_reconnect_service.py`, triggered
+by the `recovery.recovered_at` marker and guarded by a `recovery.reconnected_at`
+marker so it fires exactly once) so peers re-point at the possibly-new inbox
+URL; the §4.4 sync below then re-pulls content over the re-established
+transport.
 
 ### Replay cache
 
