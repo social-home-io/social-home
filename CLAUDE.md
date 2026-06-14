@@ -51,8 +51,8 @@ PR-only and verify-before-claiming gates still hold for anything that lands.
   `routes/base.py`. No SQL in handlers; no business logic in repos.
 - **Repository pattern:** `repositories/` holds abstract bases + SQLite
   impls. Services depend on `Abstract*Repo` Protocols only, never concrete
-  `Sqlite*Repo`. Exception: `backup_service` and `data_export_service`
-  (whole-table dumps) use raw SQL.
+  `Sqlite*Repo`. Exception: `backup_service`, `data_export_service`, and
+  `recovery_kit_service` (whole-table dumps) use raw SQL.
 - **No SQL outside `repositories/`:** services/routes call repo methods, not
   `db.fetchall` / `db.enqueue` / `db.transact`. New SQL in a service is a
   smell — extract it into the appropriate repo.
@@ -585,7 +585,7 @@ bang.
   them. Only catch for a non-standard response code.
 - Write SQL in a route handler.
 - Write SQL in a service — extract into `Abstract*Repo` + `Sqlite*Repo`
-  (exceptions: `backup_service`, `data_export_service`).
+  (exceptions: `backup_service`, `data_export_service`, `recovery_kit_service`).
 - **Store local time in DB timestamps — store UTC.** Two shapes coexist:
   SQLite `datetime('now')` → naive `"YYYY-MM-DD HH:MM:SS"`; Python
   `datetime.now(timezone.utc).isoformat()` → tz-aware `"…+00:00"`. Both UTC,

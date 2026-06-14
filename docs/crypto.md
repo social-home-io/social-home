@@ -335,6 +335,48 @@ startup via `KeyManager.from_data_dir`. Passphrase-mode deployments
 use `KeyManager.from_passphrase(passphrase, salt)`; losing the
 passphrase bricks the instance's existing wrapped keys.
 
+### Recovery Kit (`.shrk`)
+
+A **Recovery Kit** is a passphrase-sealed off-box export of the household's
+**trust layer** — the at-rest key material that the regular shareable backup
+deliberately excludes — so the SAME `instance_id` can be reconstituted on
+fresh hardware after disk loss without re-pairing. It captures the
+`instance_identity`, `remote_instances`, `spaces`, and `space_keys` rows
+(KEK-wrapped values dumped **verbatim**, still wrapped) plus the `.kek_salt`
+that re-derives the runtime KEK — so a restored host decrypts those wrapped
+values natively. (`spaces` captures every space row; for owned spaces it
+also carries the KEK-wrapped signing seed, so you remain the owner after
+recovery.) Impl: `services/recovery_crypto.py` (codec) +
+`services/recovery_kit_service.py` (build/restore). In `haos` mode the HA
+Supervisor backup already captures `{data_dir}` (DB + `.kek_salt`), so the
+Kit is the path for `standalone` / `ha` deployments.
+
+The file is one JSON object: a **clear header** + a sealed body. The header
+is the AEAD associated data, so tampering any field (e.g. swapping
+`instance_id` onto another household, or downgrading a suite) breaks
+decryption.
+
+| Field | Content |
+|-------|---------|
+| `kit_version` | `1` (receivers reject any other) |
+| `kdf_suite` | `scrypt-n16384-r8-p1` (`SUPPORTED_RECOVERY_KDF_SUITES`) |
+| `aead_suite` | `aesgcm-256` (`SUPPORTED_RECOVERY_AEAD_SUITES`) |
+| `instance_id` | the sealing household (clear, for pre-decrypt display) |
+| `created_at` | seal time (ISO-8601) |
+| `seal_salt` | b64url, 32-byte scrypt salt for the passphrase |
+| `nonce` | b64url, 12-byte AES-GCM nonce |
+| `ciphertext` | b64url, `AES-256-GCM(payload)`, AAD = canonical header |
+
+- **KDF:** `scrypt(N=2^14, r=8, p=1)` over the UTF-8 passphrase + `seal_salt`
+  → 32-byte AES key. Distinct from the KEK's HKDF — the Kit's passphrase seal
+  is a **second** layer protecting the `.kek_salt` + wrapped rows off-box.
+- **Suite tags** follow the project's `*_suite` contract: validate against the
+  `SUPPORTED_RECOVERY_*_SUITES` frozensets, **no default fallback** — an
+  unknown suite raises `UnsupportedRecoverySuite`.
+- **Fail-closed restore:** writes `.kek_salt`, then a **KEK self-test**
+  (decrypt the wrapped identity seed) runs *before* any row is inserted;
+  restore refuses a non-empty instance and rolls back atomically on failure.
+
 ## Derivation chains
 
 - `KEK = HKDF-SHA256(salt, length=32, info=b"socialhome/kek/from-data-dir")`
