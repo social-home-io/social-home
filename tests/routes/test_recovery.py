@@ -7,6 +7,7 @@ the request body (never the URL/query) so it can't leak into access logs.
 
 from __future__ import annotations
 
+from socialhome.auth import sha256_token_hash
 from socialhome.services.recovery_crypto import unseal_kit
 
 from .conftest import _auth
@@ -55,8 +56,6 @@ async def test_unauthenticated_rejected(client):
 
 
 async def test_non_admin_forbidden(client):
-    from socialhome.auth import sha256_token_hash
-
     db = client._db
     await db.enqueue(
         "INSERT INTO users(username, user_id, display_name, is_admin) "
