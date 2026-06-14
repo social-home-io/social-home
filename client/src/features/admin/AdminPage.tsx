@@ -18,7 +18,9 @@ import { api } from '@/api'
 import { currentUser } from '@/store/auth'
 import { Button } from '@/components/Button'
 import { Spinner } from '@/components/Spinner'
+import { FormError } from '@/components/FormError'
 import { showToast } from '@/components/Toast'
+import { t } from '@/i18n/i18n'
 import { HouseholdToggles, loadToggles } from '@/components/HouseholdToggles'
 import { HomeNameSettings } from '@/components/HomeNameSettings'
 import { HaUsersPanel } from './HaUsersPanel'
@@ -896,7 +898,129 @@ function BackupTab() {
           />
         </label>
       </div>
+
+      <RecoveryKitPanel />
     </section>
+  )
+}
+
+// ─── Recovery Kit ─────────────────────────────────────────────────────
+//
+// Generates the §disaster-recovery sealed Kit: a single `.shrk` file
+// the operator stores offline to rebuild the household onto new hardware.
+// Mirrors the export download flow (Bearer fetch → blob → temporary
+// <a download>) since the endpoint streams `application/octet-stream`,
+// not JSON.
+
+export function RecoveryKitPanel() {
+  const [passphrase, setPassphrase] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const onGenerate = async () => {
+    // Client-side gate — mirrors the backend's ≥8-char rule so the
+    // operator gets an instant, in-context error instead of a 422.
+    if (!passphrase) {
+      setError(t('recoveryKit.err_required'))
+      return
+    }
+    if (passphrase.length < 8) {
+      setError(t('recoveryKit.err_too_short'))
+      return
+    }
+    if (passphrase !== confirm) {
+      setError(t('recoveryKit.err_mismatch'))
+      return
+    }
+    setError(null)
+    setBusy(true)
+    try {
+      const resp = await fetch('api/recovery-kit', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('sh-token') || ''}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ passphrase }),
+      })
+      if (!resp.ok) {
+        setError(t('recoveryKit.err_failed'))
+        return
+      }
+      const blob = await resp.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      const stamp = new Date().toISOString().slice(0, 10)
+      a.href = url
+      a.download = `socialhome-recovery-kit-${stamp}.shrk`
+      document.body.appendChild(a); a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      // Don't leave the secret sitting in the DOM after it's served.
+      setPassphrase('')
+      setConfirm('')
+      showToast(t('recoveryKit.success'), 'success')
+    } catch {
+      setError(t('recoveryKit.err_failed'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div class="sh-recovery-kit">
+      <h3>{t('recoveryKit.title')}</h3>
+      <p class="sh-muted">{t('recoveryKit.intro')}</p>
+
+      <div class="sh-form-field">
+        <label class="sh-label" for="recovery-kit-passphrase">
+          {t('recoveryKit.passphrase_label')}
+        </label>
+        <input
+          id="recovery-kit-passphrase"
+          class="sh-input"
+          type="password"
+          autocomplete="new-password"
+          placeholder={t('recoveryKit.passphrase_placeholder')}
+          value={passphrase}
+          aria-describedby="recovery-kit-error"
+          disabled={busy}
+          onInput={(e) => setPassphrase((e.target as HTMLInputElement).value)}
+        />
+      </div>
+
+      <div class="sh-form-field">
+        <label class="sh-label" for="recovery-kit-confirm">
+          {t('recoveryKit.confirm_label')}
+        </label>
+        <input
+          id="recovery-kit-confirm"
+          class="sh-input"
+          type="password"
+          autocomplete="new-password"
+          value={confirm}
+          aria-describedby="recovery-kit-error"
+          disabled={busy}
+          onInput={(e) => setConfirm((e.target as HTMLInputElement).value)}
+        />
+      </div>
+
+      <FormError id="recovery-kit-error" message={error} />
+
+      <div class="sh-admin-actions">
+        <Button variant="primary" disabled={busy} onClick={() => void onGenerate()}>
+          {busy ? t('recoveryKit.generating') : t('recoveryKit.generate')}
+        </Button>
+      </div>
+
+      <p class="sh-muted sh-recovery-kit__warn">
+        {t('recoveryKit.warn_passphrase')}
+      </p>
+      <p class="sh-muted sh-recovery-kit__warn">
+        {t('recoveryKit.warn_regenerate')}
+      </p>
+    </div>
   )
 }
 

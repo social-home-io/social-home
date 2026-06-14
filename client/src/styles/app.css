@@ -15040,6 +15040,33 @@ a.sh-welcome-card:hover {
   display: flex; justify-content: flex-end; gap: var(--sh-space-xs);
   margin-top: var(--sh-space-md);
 }
+
+/* Recovery Kit — disaster-recovery subsection inside the Backup tab.
+ * Mobile-first: full-width password inputs, a comfortable tap target on
+ * the generate button, and calm warning copy below the action. */
+.sh-recovery-kit {
+  margin-top: var(--sh-space-lg);
+  padding-top: var(--sh-space-md);
+  border-top: 1px solid var(--sh-border);
+  max-width: 32rem;
+}
+.sh-recovery-kit h3 {
+  margin: 0 0 var(--sh-space-xs);
+}
+.sh-recovery-kit .sh-label {
+  display: block;
+  font-weight: 500;
+  font-size: var(--sh-font-size-sm);
+  margin-bottom: 4px;
+}
+.sh-recovery-kit .sh-input {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+}
+.sh-recovery-kit__warn {
+  margin-top: var(--sh-space-sm);
+}
 /* RemoteInviteDialog — peer-member picker. Flat list (matches
  * NewDmDialog's pattern); each row carries a primary name + a muted
  * "household · last-seen" meta line. */
