@@ -74,7 +74,10 @@ async def _seed_remote_instance(db, km):
 
 
 async def _seed_space_key(db, km):
-    # space_keys FKs spaces(id); seed the parent so the build-side DB is valid.
+    # space_keys FKs spaces(id). Seed the parent spaces row FIRST (FKs ON), then
+    # the child space_keys row — this is exactly the parents-first ordering the
+    # restore relies on. Fill only the NOT NULL, no-default spaces columns;
+    # content_key_hex is KEK-wrapped via the fixture's KeyManager.
     await db.enqueue(
         "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
         " identity_public_key) VALUES(?,?,?,?,?)",
@@ -117,7 +120,15 @@ async def empty_target(tmp_dir):
 
 
 def test_trust_tables_constant():
-    assert TRUST_TABLES == ("instance_identity", "remote_instances", "space_keys")
+    # Ordered parents-first: spaces precedes space_keys so the FK resolves
+    # during a clean insert with FK enforcement ON.
+    assert TRUST_TABLES == (
+        "instance_identity",
+        "remote_instances",
+        "spaces",
+        "space_keys",
+    )
+    assert TRUST_TABLES.index("spaces") < TRUST_TABLES.index("space_keys")
 
 
 # ─── Round-trip ─────────────────────────────────────────────────────────────
@@ -141,8 +152,16 @@ async def test_round_trip(populated, empty_target):
     assert ident["instance_id"] == iid
     remotes = await dst_db.fetchall("SELECT id FROM remote_instances")
     assert [r["id"] for r in remotes] == ["peer-iid"]
+    # The parent spaces row came back too (carries owned-space signing
+    # authority and satisfies the space_keys FK).
+    spaces = await dst_db.fetchall("SELECT id, name FROM spaces")
+    assert [(r["id"], r["name"]) for r in spaces] == [("space-1", "Family")]
     keys = await dst_db.fetchall("SELECT space_id, epoch FROM space_keys")
     assert [(r["space_id"], r["epoch"]) for r in keys] == [("space-1", 1)]
+
+    # FK enforcement stayed ON throughout — no PRAGMA games.
+    fk = await dst_db.fetchval("PRAGMA foreign_keys")
+    assert fk == 1
 
     # A fresh KeyManager on the restored data dir decrypts the wrapped seed.
     km2 = KeyManager.from_data_dir(dst_dir)
@@ -262,9 +281,31 @@ async def _reseal_with_payload(kit, data):
     )
 
 
+async def test_space_keys_restore_without_fk_error(populated, empty_target):
+    """Regression for the rejected FK-suspend approach: with ``spaces`` in
+    TRUST_TABLES ahead of ``space_keys``, the child FK resolves naturally and
+    restore completes with FK enforcement ON the whole time — no PRAGMA OFF, no
+    orphaned space_keys row."""
+    src_dir, src_db, iid, seed = populated
+    dst_dir, dst_db = empty_target
+
+    kit = await RecoveryKitService(src_db, src_dir).build_kit(PASS)
+    # Must not raise an FK error.
+    await RecoveryKitService(dst_db, dst_dir).restore_kit(kit, PASS)
+
+    keys = await dst_db.fetchall("SELECT space_id, epoch FROM space_keys")
+    assert [(r["space_id"], r["epoch"]) for r in keys] == [("space-1", 1)]
+    # The parent it references is present (not orphaned).
+    parent = await dst_db.fetchone("SELECT id FROM spaces WHERE id=?", ("space-1",))
+    assert parent is not None
+    # Enforcement was never toggled off.
+    fk = await dst_db.fetchval("PRAGMA foreign_keys")
+    assert fk == 1
+
+
 async def test_insert_failure_rolls_back(populated, empty_target):
     """A hard SQL error mid-insert rolls back the whole insert (no partial
-    trust layer) and re-enables FK enforcement."""
+    trust layer); FK enforcement is unaffected (it was never toggled)."""
     src_dir, src_db, iid, seed = populated
     dst_dir, dst_db = empty_target
     kit = await RecoveryKitService(src_db, src_dir).build_kit(PASS)

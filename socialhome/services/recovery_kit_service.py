@@ -3,10 +3,19 @@
 A "Recovery Kit" (``.shrk`` file) lets a household reconstitute the SAME
 ``instance_id`` on fresh hardware: it captures the **trust layer** —
 ``instance_identity`` (the KEK-wrapped Ed25519 seed + routing secret),
-``remote_instances`` (KEK-wrapped per-peer session keys), and ``space_keys``
-(KEK-wrapped per-space content keys) — together with the ``.kek_salt`` that
-the runtime KEK is derived from, all sealed behind a user passphrase by
+``remote_instances`` (KEK-wrapped per-peer session keys), ``spaces`` (the
+owned-space rows that carry signing authority) and ``space_keys`` (KEK-wrapped
+per-space content keys) — together with the ``.kek_salt`` that the runtime KEK
+is derived from, all sealed behind a user passphrase by
 :mod:`socialhome.services.recovery_crypto`.
+
+``spaces`` is included for two reasons: it is the FK parent of ``space_keys``
+(restoring it first lets the FK resolve naturally on a fresh DB, no PRAGMA
+games), and it carries the owned-space signing authority you need to remain a
+space owner after recovery. ``spaces`` rows also re-appear in the shareable
+data backup, but every restore inserts with ``INSERT OR IGNORE``, so a
+double-restore is idempotent and each space's content key stays paired with
+its row.
 
 This module does **whole-table dump / restore with raw SQL**. That is an
 explicitly-allowed exception to the no-SQL-outside-``repositories/`` rule,
@@ -42,9 +51,18 @@ from .recovery_crypto import seal_kit, unseal_kit
 
 log = logging.getLogger(__name__)
 
-#: The trust-layer tables captured by the kit, in restore order. All three
-#: hold KEK-wrapped secrets; they are dumped/restored verbatim (still wrapped).
-TRUST_TABLES: tuple[str, ...] = ("instance_identity", "remote_instances", "space_keys")
+#: The trust-layer tables captured by the kit, in restore order. Ordered
+#: parents-first so FK constraints hold during a clean insert: ``spaces`` is
+#: the FK parent of ``space_keys`` (and is itself FK-free), so restoring it
+#: before ``space_keys`` lets the reference resolve naturally on a fresh DB —
+#: no PRAGMA toggling. ``instance_identity`` / ``remote_instances`` /
+#: ``space_keys`` hold KEK-wrapped secrets, dumped/restored verbatim (wrapped).
+TRUST_TABLES: tuple[str, ...] = (
+    "instance_identity",
+    "remote_instances",
+    "spaces",  # parent of space_keys; itself FK-free
+    "space_keys",
+)
 
 #: instance_config key recording the wall-clock time a restore completed.
 RECOVERED_AT_KEY = "recovery.recovered_at"
@@ -70,6 +88,11 @@ class RecoveryKitService:
 
     async def build_kit(self, passphrase: str) -> bytes:
         """Dump the trust tables + ``.kek_salt``, return sealed ``.shrk`` bytes.
+
+        The dump includes ``spaces`` (the FK parent of ``space_keys`` and the
+        carrier of owned-space signing authority) alongside the wrapped-secret
+        tables. ``spaces`` also re-appears in the shareable data backup;
+        restore uses ``INSERT OR IGNORE`` so a double-restore is idempotent.
 
         Raises :class:`RecoveryRestoreError` when there is no identity to back
         up, or the ``.kek_salt`` is missing.
@@ -179,35 +202,20 @@ class RecoveryKitService:
             )
 
     async def _insert_trust_tables(self, tables: dict[str, list[dict]]) -> None:
-        """Insert all trust rows in one atomic transaction.
+        """Insert all trust rows in one atomic transaction, parents-first.
 
-        FK enforcement is suspended for the insert: ``space_keys`` references
-        ``spaces(id)``, but ``spaces`` is NOT part of the trust layer (it
-        re-syncs over federation), so the rows are legitimately orphaned at
-        restore time. The pragma is restored in a ``finally`` so a later
-        request still gets referential integrity.
+        ``TRUST_TABLES`` is ordered so every FK parent precedes its child —
+        ``spaces`` before ``space_keys`` — so on a fresh (empty) instance the
+        FK from ``space_keys.space_id`` resolves against the ``spaces`` row
+        inserted moments earlier. FK enforcement stays ON throughout; no
+        PRAGMA toggling, no manual COMMIT/BEGIN. ``transact`` owns the
+        transaction lifecycle, mirroring ``backup_service._import_table``.
         """
 
         def _run(conn: sqlite3.Connection) -> None:
-            # transact() has already opened BEGIN IMMEDIATE. PRAGMA
-            # foreign_keys is a no-op inside a transaction, so close it,
-            # run the FK-suspended insert in its own transaction, then
-            # re-open one for transact()'s trailing COMMIT.
-            conn.execute("COMMIT")
-            conn.execute("PRAGMA foreign_keys=OFF")
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                try:
-                    for table in TRUST_TABLES:
-                        for row in tables.get(table, []):
-                            self._insert_row(conn, table, row)
-                    conn.execute("COMMIT")
-                except Exception:
-                    conn.execute("ROLLBACK")
-                    raise
-            finally:
-                conn.execute("PRAGMA foreign_keys=ON")
-                conn.execute("BEGIN IMMEDIATE")
+            for table in TRUST_TABLES:
+                for row in tables.get(table, []):
+                    self._insert_row(conn, table, row)
 
         await self._db.transact(_run)
 
