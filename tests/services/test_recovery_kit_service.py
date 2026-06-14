@@ -131,6 +131,40 @@ def test_trust_tables_constant():
     assert TRUST_TABLES.index("spaces") < TRUST_TABLES.index("space_keys")
 
 
+# ─── reset_trust_layer ───────────────────────────────────────────────────────
+
+
+async def test_reset_trust_layer_empties_all_tables(populated):
+    """After reset, every trust table is empty (auto-minted rows wiped)."""
+    src_dir, src_db, iid, seed = populated
+    # Sanity: all four tables are populated before the reset.
+    for table in TRUST_TABLES:
+        assert (await src_db.fetchone(f"SELECT 1 FROM {table} LIMIT 1")) is not None
+
+    await RecoveryKitService(src_db, src_dir).reset_trust_layer()
+
+    for table in TRUST_TABLES:
+        assert (await src_db.fetchone(f"SELECT 1 FROM {table} LIMIT 1")) is None
+
+
+async def test_build_reset_restore_round_trip(populated, empty_target):
+    """A build→reset→restore round-trip on the SAME box: reset makes it empty
+    so restore_kit proceeds, restoring the original instance_id."""
+    src_dir, src_db, iid, seed = populated
+
+    kit = await RecoveryKitService(src_db, src_dir).build_kit(PASS)
+
+    svc = RecoveryKitService(src_db, src_dir)
+    await svc.reset_trust_layer()
+    restored_iid = await svc.restore_kit(kit, PASS)
+    assert restored_iid == iid
+
+    ident = await src_db.fetchone(
+        "SELECT instance_id FROM instance_identity WHERE id='self'"
+    )
+    assert ident["instance_id"] == iid
+
+
 # ─── Round-trip ─────────────────────────────────────────────────────────────
 
 

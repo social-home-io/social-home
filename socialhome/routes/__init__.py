@@ -383,6 +383,7 @@ from .setup import (
     HaOwnerSetupView,
     HaPersonsSetupView,
     HaosCompleteSetupView,
+    RecoverySetupRestoreView,
     StandaloneSetupView,
 )
 from .spa import mount_spa
@@ -462,6 +463,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/setup/ha/persons", HaPersonsSetupView)
     app.router.add_view("/api/setup/ha/owner", HaOwnerSetupView)
     app.router.add_view("/api/setup/haos/complete", HaosCompleteSetupView)
+    app.router.add_view("/api/setup/recovery/restore", RecoverySetupRestoreView)
 
     # ── Feed / posts ────────────────────────────────────────────────────
     app.router.add_view("/api/feed", FeedCollectionView)

@@ -290,6 +290,36 @@ Federation is asynchronous: peers go offline, networks partition,
 addons get restarted. The system is designed so that none of this
 loses data, and every event is processed at most once.
 
+### Disaster recovery (Recovery Kit)
+
+A household's identity *is* its `instance_identity` row (Ed25519 keypair,
+KEK-wrapped); peers pin its public key, so total disk loss would otherwise
+mean re-pairing with everyone in person. Two recovery paths, selected by
+capability (never `config.mode`):
+
+- **haos:** the HA Supervisor backup already captures the add-on's
+  `{data_dir}` — both the SQLite DB and `.kek_salt` — so restoring an HA
+  backup reconstitutes the same `instance_id` with no SH-specific step.
+- **standalone / ha:** a **Recovery Kit** (`.shrk`) — a passphrase-sealed
+  export of the *trust layer* (`instance_identity`, `remote_instances`,
+  `spaces`, `space_keys`) plus the `.kek_salt`. The shareable data backup
+  deliberately excludes all of these (`NEVER_EXPORT`), so the Kit is the only
+  artifact that brings identity + peer trust back. Wire format + crypto:
+  `docs/crypto.md` "Recovery Kit"; impl: `services/recovery_crypto.py` +
+  `services/recovery_kit_service.py`.
+
+Build via admin `POST /api/recovery-kit`. Restore on a fresh box via the
+setup wizard (`POST /api/setup/recovery/restore`): the box auto-mints a
+throwaway identity at startup, so the endpoint validates the Kit, wipes the
+throwaway trust rows, restores the Kit's, marks setup complete, and triggers
+a process restart so the restored identity/KEK load cleanly. Because the same
+Ed25519 key returns, the first post-restart boot fans a signed `URL_UPDATED`
+out to every restored peer (`services/recovery_reconnect_service.py`, triggered
+by the `recovery.recovered_at` marker and guarded by a `recovery.reconnected_at`
+marker so it fires exactly once) so peers re-point at the possibly-new inbox
+URL; the §4.4 sync below then re-pulls content over the re-established
+transport.
+
 ### Replay cache
 
 Every accepted envelope's `msg_id` lands in `federation_replay_cache`

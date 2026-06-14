@@ -24,7 +24,11 @@ never hit the gate in practice — the gate is defence-in-depth.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import logging
+import os
+import signal
 
 from aiohttp import web
 
@@ -34,13 +38,28 @@ from ..app_keys import (
     federation_repo_key,
     preferences_service_key,
     platform_adapter_key,
+    recovery_kit_service_key,
     setup_service_key,
 )
 from ..platform.adapter import Capability, ExternalUser
 from ..security import error_response
+from ..services.recovery_crypto import (
+    RecoveryKitError,
+    UnsupportedRecoverySuite,
+    unseal_kit,
+)
+from ..services.recovery_kit_service import RecoveryKitService, RecoveryRestoreError
 from .base import BaseView
 
 log = logging.getLogger(__name__)
+
+
+def request_process_restart(delay: float = 1.0) -> None:
+    """Schedule a graceful self-SIGTERM so a supervisor/container restarts us
+    with the restored identity. Standalone-without-restart-policy operators
+    restart manually (the response says restart_required)."""
+    loop = asyncio.get_running_loop()
+    loop.call_later(delay, lambda: os.kill(os.getpid(), signal.SIGTERM))
 
 
 async def _gate(view: BaseView) -> web.Response | None:
@@ -286,6 +305,62 @@ class HaosCompleteSetupView(BaseView):
         await _apply_household_name(self, household_name)
         await self.svc(setup_service_key).mark_complete()
         return web.json_response({"username": owner.username})
+
+
+class RecoverySetupRestoreView(BaseView):
+    """``POST /api/setup/recovery/restore`` — reconstitute identity from a Kit.
+
+    Setup-gated, no bearer (no admin exists on a fresh box yet — same threat
+    model as the other fresh-box setup endpoints; possession of a valid Kit +
+    passphrase is the gate). Wipes the auto-minted trust state, restores the
+    Kit, marks setup complete, and schedules a restart so the restored
+    identity/KEK load on reboot.
+    """
+
+    async def post(self) -> web.Response:
+        if (resp := await _gate(self)) is not None:
+            return resp
+        body = await self.body()
+        kit_b64 = body.get("kit_b64")
+        passphrase = body.get("passphrase")
+        if not isinstance(kit_b64, str) or not isinstance(passphrase, str):
+            return error_response(
+                422, "UNPROCESSABLE", "kit_b64 and passphrase are required."
+            )
+        try:
+            kit_bytes = base64.b64decode(kit_b64, validate=True)
+        except Exception:
+            return error_response(422, "UNPROCESSABLE", "kit_b64 is not valid base64.")
+        svc: RecoveryKitService = self.svc(recovery_kit_service_key)
+        # Validate the kit (passphrase + integrity) BEFORE the destructive wipe.
+        # reset_trust_layer() is a wide ON DELETE CASCADE; running it only after
+        # the kit proves valid means a wrong passphrase can never strand a fresh
+        # box, and the cascade cannot fire without a usable kit (defense in depth
+        # atop the setup gate).
+        try:
+            unseal_kit(kit_bytes, passphrase)
+        except RecoveryKitError, UnsupportedRecoverySuite:
+            return error_response(
+                422,
+                "BAD_KIT",
+                "Recovery kit could not be opened (wrong passphrase or corrupt file).",
+            )
+        try:
+            await svc.reset_trust_layer()
+            instance_id = await svc.restore_kit(kit_bytes, passphrase)
+        except RecoveryKitError, UnsupportedRecoverySuite:
+            # Generic message only — never echo the underlying exception text,
+            # so a wrong passphrase isn't a guessing oracle.
+            return error_response(
+                422,
+                "BAD_KIT",
+                "Recovery kit could not be opened (wrong passphrase or corrupt file).",
+            )
+        except RecoveryRestoreError as exc:
+            return error_response(422, "RESTORE_FAILED", str(exc))
+        await self.svc(setup_service_key).mark_complete()
+        request_process_restart()
+        return web.json_response({"instance_id": instance_id, "restart_required": True})
 
 
 async def _mirror_admin_user(db, external: ExternalUser) -> None:
