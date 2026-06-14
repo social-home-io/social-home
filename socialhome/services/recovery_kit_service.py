@@ -176,6 +176,27 @@ class RecoveryKitService:
             return str(self_row["instance_id"])
         return str(header["instance_id"])
 
+    # ── Reset ──────────────────────────────────────────────────────────────
+
+    async def reset_trust_layer(self) -> None:
+        """Delete the auto-minted trust rows so a fresh-box restore can proceed.
+
+        Only safe pre-setup (throwaway identity). Child-first delete order keeps
+        FK enforcement happy; ON DELETE CASCADE clears any dependents. Whole-table
+        raw SQL — same documented exception as build_kit/restore_kit.
+        """
+
+        def _run(conn: sqlite3.Connection) -> None:
+            for table in (
+                "space_keys",
+                "spaces",
+                "remote_instances",
+                "instance_identity",
+            ):
+                conn.execute(f"DELETE FROM {table}")
+
+        await self._db.transact(_run)
+
     # ── Helpers ──────────────────────────────────────────────────────────--
 
     @staticmethod
