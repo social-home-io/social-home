@@ -9543,6 +9543,22 @@ hr {
   font-size: 0.8125rem;
   color: var(--sh-text-muted);
 }
+/* Calm secondary affordance: "Restore from a Recovery Kit" off the
+   welcome step, and "Back to normal setup" off the restore form. Block
+   + centered so it reads as a tertiary action below the primary CTA
+   without competing with it; full-width tap area on mobile. */
+.sh-setup-recovery-cta {
+  display: block;
+  width: 100%;
+  margin-top: var(--sh-space-md);
+  padding: 8px 0;
+  text-align: center;
+  font-size: 0.875rem;
+}
+.sh-setup-card input[type="file"] {
+  width: 100%;
+  font-size: 0.875rem;
+}
 .sh-setup-strength {
   display: flex;
   gap: 4px;

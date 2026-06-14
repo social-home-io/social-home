@@ -196,11 +196,15 @@ interface WelcomeCardProps {
   busy?: boolean
   error?: string | null
   onContinue: () => void
+  /** Reveal the mode-agnostic "Restore from a Recovery Kit" flow.
+   *  Rendered as a calm secondary link below the primary CTA so it's
+   *  discoverable without competing with normal first-boot setup. */
+  onRestore?: () => void
 }
 
 function WelcomeCard({
   mode, step, ctaLabelKey = 'setup.welcome.continue',
-  busy = false, error = null, onContinue,
+  busy = false, error = null, onContinue, onRestore,
 }: WelcomeCardProps) {
   return (
     <SetupShell step={step}>
@@ -218,20 +222,176 @@ function WelcomeCard({
       <Button onClick={onContinue} disabled={busy}>
         {busy ? t('setup.submitting') : t(ctaLabelKey)}
       </Button>
+      {onRestore && (
+        <button
+          type="button"
+          class="sh-link sh-setup-recovery-cta"
+          onClick={onRestore}
+          disabled={busy}
+        >
+          {t('setup.recovery.cta')}
+        </button>
+      )}
     </SetupShell>
   )
+}
+
+/**
+ * RecoveryRestoreFlow — mode-agnostic "Restore from a Recovery Kit"
+ * path off the welcome step.
+ *
+ * Restore reconstitutes the whole household identity from a sealed
+ * ``.shrk`` Kit, so it's the same regardless of deployment mode. The
+ * backend endpoint (``POST /api/setup/recovery/restore``) is
+ * setup-gated and takes no bearer. On success it RESTARTS and returns
+ * no token — so we land on a terminal "restored, restarting; wait and
+ * reload" state instead of redirecting (an immediate redirect would
+ * just hit the restarting backend, and the identity has changed).
+ */
+function RecoveryRestoreFlow({ onBack }: { onBack: () => void }) {
+  const [file, setFile] = useState<File | null>(null)
+  const [passphrase, setPassphrase] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+
+  async function submit(e: Event) {
+    e.preventDefault()
+    if (!file) {
+      setError(t('setup.recovery.err_no_file'))
+      return
+    }
+    if (!passphrase) {
+      setError(t('setup.recovery.err_no_passphrase'))
+      return
+    }
+    setBusy(true)
+    setError(null)
+    let kitB64: string
+    try {
+      // ``readAsDataURL`` handles any size; strip the
+      // ``data:...;base64,`` prefix to get the bare base64 payload.
+      // ``btoa(String.fromCharCode(...))`` overflows the call stack
+      // on a large Kit, so we never go that route.
+      kitB64 = await readKitBase64(file)
+    } catch {
+      setError(t('setup.recovery.err_read'))
+      setBusy(false)
+      return
+    }
+    try {
+      const resp = await api.post('/api/setup/recovery/restore', {
+        kit_b64: kitB64,
+        passphrase,
+      }) as { instance_id: string; restart_required: boolean }
+      if (resp?.restart_required) {
+        // Backend is restarting + identity changed — do NOT redirect to
+        // ``basePath`` (it would just error). Show the terminal state.
+        setDone(true)
+        return
+      }
+      // Defensive: a non-restart success isn't expected, but reload
+      // so the SPA re-reads the fresh instance config.
+      window.location.reload()
+    } catch (err: any) {
+      if (err?.code === 'BAD_KIT') {
+        setError(t('setup.recovery.err_bad_kit'))
+      } else if (err?.code === 'RESTORE_FAILED') {
+        setError(err?.message || t('setup.recovery.err_generic'))
+      } else {
+        setError(err?.message || t('setup.recovery.err_generic'))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <SetupShell>
+        <div class="sh-setup-welcome" aria-hidden="true">
+          <span class="sh-setup-welcome-icon">🛟</span>
+        </div>
+        <h1 class="sh-setup-title">{t('setup.recovery.done_title')}</h1>
+        <p class="sh-setup-intro">{t('setup.recovery.done_intro')}</p>
+        <p class="sh-setup-hint">{t('setup.recovery.done_hint')}</p>
+        <Button onClick={() => { window.location.href = basePath }}>
+          {t('setup.recovery.reload')}
+        </Button>
+      </SetupShell>
+    )
+  }
+
+  return (
+    <SetupShell>
+      <h1 class="sh-setup-title">{t('setup.recovery.title')}</h1>
+      <p class="sh-setup-intro">{t('setup.recovery.intro')}</p>
+      <form onSubmit={submit} class="sh-setup-form">
+        <label class="sh-setup-field">
+          <span class="sh-setup-label">{t('setup.recovery.file_label')}</span>
+          <input
+            type="file"
+            accept=".shrk"
+            onChange={(e) => setFile((e.target as HTMLInputElement).files?.[0] ?? null)}
+          />
+          <span class="sh-setup-hint">{t('setup.recovery.file_hint')}</span>
+        </label>
+        <label class="sh-setup-field">
+          <span class="sh-setup-label">{t('setup.recovery.passphrase_label')}</span>
+          <input
+            type="password"
+            autoComplete="off"
+            placeholder={t('setup.recovery.passphrase_placeholder')}
+            value={passphrase}
+            onInput={(e) => setPassphrase((e.target as HTMLInputElement).value)}
+          />
+        </label>
+        <FormError id="setup-error" message={error} />
+        <Button type="submit" disabled={busy}>
+          {busy ? t('setup.recovery.restoring') : t('setup.recovery.restore')}
+        </Button>
+        <button
+          type="button"
+          class="sh-link sh-setup-recovery-cta"
+          onClick={onBack}
+          disabled={busy}
+        >
+          {t('setup.recovery.back')}
+        </button>
+      </form>
+    </SetupShell>
+  )
+}
+
+/** Read a File as bare base64 via ``readAsDataURL`` (no stack
+ *  overflow on large Kits), stripping the ``data:...;base64,``
+ *  prefix the browser prepends. */
+function readKitBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => {
+      const result = String(r.result)
+      const comma = result.indexOf(',')
+      resolve(comma >= 0 ? result.slice(comma + 1) : result)
+    }
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(file)
+  })
 }
 
 // ── Standalone: welcome → form ─────────────────────────────────────────────
 
 function StandaloneFlow() {
   const [started, setStarted] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  if (restoring) return <RecoveryRestoreFlow onBack={() => setRestoring(false)} />
   if (!started) {
     return (
       <WelcomeCard
         mode="standalone"
         step={{ current: 1, total: 2 }}
         onContinue={() => setStarted(true)}
+        onRestore={() => setRestoring(true)}
       />
     )
   }
@@ -334,12 +494,15 @@ function StandaloneSetupForm() {
 
 function HaFlow() {
   const [started, setStarted] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  if (restoring) return <RecoveryRestoreFlow onBack={() => setRestoring(false)} />
   if (!started) {
     return (
       <WelcomeCard
         mode="ha"
         step={{ current: 1, total: 2 }}
         onContinue={() => setStarted(true)}
+        onRestore={() => setRestoring(true)}
       />
     )
   }
@@ -519,9 +682,12 @@ function HaOwnerForm() {
 
 function HaosFlow() {
   const [stage, setStage] = useState<'welcome' | 'name'>('welcome')
+  const [restoring, setRestoring] = useState(false)
   const [householdName, setHouseholdName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  if (restoring) return <RecoveryRestoreFlow onBack={() => setRestoring(false)} />
 
   async function continueSetup() {
     setBusy(true)
@@ -562,6 +728,7 @@ function HaosFlow() {
         error={error}
         ctaLabelKey="setup.haos.continue"
         onContinue={() => setStage('name')}
+        onRestore={() => setRestoring(true)}
       />
     )
   }
