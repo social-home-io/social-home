@@ -9543,6 +9543,22 @@ hr {
   font-size: 0.8125rem;
   color: var(--sh-text-muted);
 }
+/* Calm secondary affordance: "Restore from a Recovery Kit" off the
+   welcome step, and "Back to normal setup" off the restore form. Block
+   + centered so it reads as a tertiary action below the primary CTA
+   without competing with it; full-width tap area on mobile. */
+.sh-setup-recovery-cta {
+  display: block;
+  width: 100%;
+  margin-top: var(--sh-space-md);
+  padding: 8px 0;
+  text-align: center;
+  font-size: 0.875rem;
+}
+.sh-setup-card input[type="file"] {
+  width: 100%;
+  font-size: 0.875rem;
+}
 .sh-setup-strength {
   display: flex;
   gap: 4px;
@@ -15039,6 +15055,33 @@ a.sh-welcome-card:hover {
 .sh-modal-actions {
   display: flex; justify-content: flex-end; gap: var(--sh-space-xs);
   margin-top: var(--sh-space-md);
+}
+
+/* Recovery Kit — disaster-recovery subsection inside the Backup tab.
+ * Mobile-first: full-width password inputs, a comfortable tap target on
+ * the generate button, and calm warning copy below the action. */
+.sh-recovery-kit {
+  margin-top: var(--sh-space-lg);
+  padding-top: var(--sh-space-md);
+  border-top: 1px solid var(--sh-border);
+  max-width: 32rem;
+}
+.sh-recovery-kit h3 {
+  margin: 0 0 var(--sh-space-xs);
+}
+.sh-recovery-kit .sh-label {
+  display: block;
+  font-weight: 500;
+  font-size: var(--sh-font-size-sm);
+  margin-bottom: 4px;
+}
+.sh-recovery-kit .sh-input {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+}
+.sh-recovery-kit__warn {
+  margin-top: var(--sh-space-sm);
 }
 /* RemoteInviteDialog — peer-member picker. Flat list (matches
  * NewDmDialog's pattern); each row carries a primary name + a muted
