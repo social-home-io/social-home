@@ -3,16 +3,18 @@
 A "Recovery Kit" (``.shrk`` file) lets a household reconstitute the SAME
 ``instance_id`` on fresh hardware: it captures the **trust layer** —
 ``instance_identity`` (the KEK-wrapped Ed25519 seed + routing secret),
-``remote_instances`` (KEK-wrapped per-peer session keys), ``spaces`` (the
-owned-space rows that carry signing authority) and ``space_keys`` (KEK-wrapped
-per-space content keys) — together with the ``.kek_salt`` that the runtime KEK
-is derived from, all sealed behind a user passphrase by
+``remote_instances`` (KEK-wrapped per-peer session keys), ``spaces`` (every
+space row — for owned spaces this carries the KEK-wrapped signing seed) and
+``space_keys`` (KEK-wrapped per-space content keys) — together with the
+``.kek_salt`` that the runtime KEK is derived from, all sealed behind a
+user passphrase by
 :mod:`socialhome.services.recovery_crypto`.
 
 ``spaces`` is included for two reasons: it is the FK parent of ``space_keys``
 (restoring it first lets the FK resolve naturally on a fresh DB, no PRAGMA
-games), and it carries the owned-space signing authority you need to remain a
-space owner after recovery. ``spaces`` rows also re-appear in the shareable
+games), and for owned spaces it carries the signing authority you need to
+remain a space owner after recovery. ``spaces`` rows also re-appear in the
+shareable
 data backup, but every restore inserts with ``INSERT OR IGNORE``, so a
 double-restore is idempotent and each space's content key stays paired with
 its row.

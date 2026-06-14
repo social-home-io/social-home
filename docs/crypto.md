@@ -344,7 +344,9 @@ fresh hardware after disk loss without re-pairing. It captures the
 `instance_identity`, `remote_instances`, `spaces`, and `space_keys` rows
 (KEK-wrapped values dumped **verbatim**, still wrapped) plus the `.kek_salt`
 that re-derives the runtime KEK — so a restored host decrypts those wrapped
-values natively. Impl: `services/recovery_crypto.py` (codec) +
+values natively. (`spaces` captures every space row; for owned spaces it
+also carries the KEK-wrapped signing seed, so you remain the owner after
+recovery.) Impl: `services/recovery_crypto.py` (codec) +
 `services/recovery_kit_service.py` (build/restore). In `haos` mode the HA
 Supervisor backup already captures `{data_dir}` (DB + `.kek_salt`), so the
 Kit is the path for `standalone` / `ha` deployments.
