@@ -43,7 +43,11 @@ from ..app_keys import (
 )
 from ..platform.adapter import Capability, ExternalUser
 from ..security import error_response
-from ..services.recovery_crypto import RecoveryKitError, UnsupportedRecoverySuite
+from ..services.recovery_crypto import (
+    RecoveryKitError,
+    UnsupportedRecoverySuite,
+    unseal_kit,
+)
 from ..services.recovery_kit_service import RecoveryKitService, RecoveryRestoreError
 from .base import BaseView
 
@@ -54,7 +58,7 @@ def request_process_restart(delay: float = 1.0) -> None:
     """Schedule a graceful self-SIGTERM so a supervisor/container restarts us
     with the restored identity. Standalone-without-restart-policy operators
     restart manually (the response says restart_required)."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     loop.call_later(delay, lambda: os.kill(os.getpid(), signal.SIGTERM))
 
 
@@ -328,6 +332,19 @@ class RecoverySetupRestoreView(BaseView):
         except Exception:
             return error_response(422, "UNPROCESSABLE", "kit_b64 is not valid base64.")
         svc: RecoveryKitService = self.svc(recovery_kit_service_key)
+        # Validate the kit (passphrase + integrity) BEFORE the destructive wipe.
+        # reset_trust_layer() is a wide ON DELETE CASCADE; running it only after
+        # the kit proves valid means a wrong passphrase can never strand a fresh
+        # box, and the cascade cannot fire without a usable kit (defense in depth
+        # atop the setup gate).
+        try:
+            unseal_kit(kit_bytes, passphrase)
+        except RecoveryKitError, UnsupportedRecoverySuite:
+            return error_response(
+                422,
+                "BAD_KIT",
+                "Recovery kit could not be opened (wrong passphrase or corrupt file).",
+            )
         try:
             await svc.reset_trust_layer()
             instance_id = await svc.restore_kit(kit_bytes, passphrase)

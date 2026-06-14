@@ -89,6 +89,12 @@ async def test_restore_happy_path(client, tmp_dir):
 async def test_restore_wrong_passphrase(client, tmp_dir):
     kit_b64, _ = await _build_foreign_kit(tmp_dir)
 
+    # Capture the box's auto-minted identity before the failed restore.
+    before = await client._db.fetchone(
+        "SELECT instance_id FROM instance_identity WHERE id='self'"
+    )
+    assert before is not None
+
     with patch(RESTART_TARGET) as restart:
         resp = await client.post(
             _url(), json={"kit_b64": kit_b64, "passphrase": "not the passphrase"}
@@ -99,11 +105,13 @@ async def test_restore_wrong_passphrase(client, tmp_dir):
     assert data["error"]["code"] == "BAD_KIT"
     # No restart scheduled on a failed restore.
     restart.assert_not_called()
-    # No half-restored identity left behind.
-    ident = await client._db.fetchone(
+    # The kit is validated BEFORE the destructive wipe, so a wrong passphrase
+    # must leave the existing identity untouched (not strand the box).
+    after = await client._db.fetchone(
         "SELECT instance_id FROM instance_identity WHERE id='self'"
     )
-    assert ident is None
+    assert after is not None
+    assert after["instance_id"] == before["instance_id"]
 
 
 async def test_restore_bad_base64(client):
