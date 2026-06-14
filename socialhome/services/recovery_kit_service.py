@@ -136,30 +136,33 @@ class RecoveryKitService:
         unknown suite). Fails closed: ``.kek_salt`` is written and the KEK is
         self-tested **before** any row is inserted.
         """
-        existing = await self._db.fetchone(
-            "SELECT 1 FROM instance_identity WHERE id='self'",
-        )
-        if existing is not None:
-            raise RecoveryRestoreError(
-                "instance already has an identity; restore only into an empty instance",
-            )
+        # Refuse unless EVERY trust table is empty — not just instance_identity.
+        # A partially-provisioned box (peers/spaces present, no identity) would
+        # otherwise be left Frankensteined: INSERT OR IGNORE keeps the stale
+        # rows while the salt overwrite renders their KEK-wrapped keys
+        # permanently undecryptable. Restore only into a genuinely empty box.
+        for table in TRUST_TABLES:
+            row = await self._db.fetchone(f"SELECT 1 FROM {table} LIMIT 1")
+            if row is not None:
+                raise RecoveryRestoreError(
+                    "instance is not empty; restore only into a fresh instance",
+                )
 
         header, payload = unseal_kit(kit_bytes, passphrase)
-        data = orjson.loads(payload)
-        salt = b64url_decode(data["kek_salt"])
-        if len(salt) != KeyManager.KEK_BYTES:
-            raise RecoveryRestoreError(
-                f"recovery kit .kek_salt has unexpected length {len(salt)}",
-            )
-        tables: dict[str, list[dict]] = data["tables"]
+        salt, tables = self._parse_payload(payload)
 
         # Write the salt FIRST (overwriting any startup-minted random salt) so
-        # KeyManager.from_data_dir derives the kit's KEK, then self-test.
+        # KeyManager.from_data_dir derives the kit's KEK, then self-test. On any
+        # failure after this point the box is still empty, so a best-effort salt
+        # cleanup returns it to a pristine "no salt" state.
         await self._write_salt(salt)
         self_row = self._find_self_row(tables)
-        self._kek_self_test(self_row)
-
-        await self._insert_trust_tables(tables)
+        try:
+            await asyncio.to_thread(self._kek_self_test, self_row)
+            await self._insert_trust_tables(tables)
+        except Exception:
+            await self._remove_salt()
+            raise
 
         await self._db.enqueue(
             "INSERT INTO instance_config(key,value) VALUES(?,?) "
@@ -243,3 +246,50 @@ class RecoveryKitService:
             await f.write(salt)
         # aiofiles.os has no chmod; run the sync call off the event loop.
         await asyncio.to_thread(os.chmod, path, 0o600)
+
+    async def _remove_salt(self) -> None:
+        """Best-effort removal of the just-written salt after a failed restore."""
+        path = self._data_dir / _SALT_FILENAME
+        if await aiofiles.os.path.isfile(path):
+            await aiofiles.os.remove(path)
+
+    @staticmethod
+    def _parse_payload(payload: bytes) -> tuple[bytes, dict[str, list[dict]]]:
+        """Validate the decrypted kit payload shape, returning (salt, tables).
+
+        The kit is authenticated (a valid passphrase produced it), but
+        authenticity does not prove the contents are well-formed — a crafted
+        kit could still carry a malformed payload. Map every shape error to
+        :class:`RecoveryRestoreError` so callers (and a future route) get a
+        domain error, never a bare ``KeyError`` / ``AttributeError``.
+        """
+        try:
+            data = orjson.loads(payload)
+        except orjson.JSONDecodeError as exc:
+            raise RecoveryRestoreError(
+                "recovery kit payload is not valid JSON"
+            ) from exc
+        if not isinstance(data, dict):
+            raise RecoveryRestoreError("recovery kit payload must be a JSON object")
+        raw_salt = data.get("kek_salt")
+        tables = data.get("tables")
+        if not isinstance(raw_salt, str) or not isinstance(tables, dict):
+            raise RecoveryRestoreError(
+                "recovery kit payload is missing kek_salt/tables"
+            )
+        try:
+            salt = b64url_decode(raw_salt)
+        except (ValueError, TypeError) as exc:
+            raise RecoveryRestoreError(
+                "recovery kit .kek_salt is not valid b64"
+            ) from exc
+        if len(salt) != KeyManager.KEK_BYTES:
+            raise RecoveryRestoreError(
+                f"recovery kit .kek_salt has unexpected length {len(salt)}",
+            )
+        for name, rows in tables.items():
+            if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+                raise RecoveryRestoreError(
+                    f"recovery kit table {name!r} is not a list of rows",
+                )
+        return salt, tables

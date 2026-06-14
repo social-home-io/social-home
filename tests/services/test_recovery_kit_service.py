@@ -181,8 +181,38 @@ async def test_refuse_non_empty_target(populated):
     src_dir, src_db, iid, seed = populated
     kit = await RecoveryKitService(src_db, src_dir).build_kit(PASS)
     # Restore back into the SAME (already-populated) instance must refuse.
-    with pytest.raises(RecoveryRestoreError, match="already has an identity"):
+    with pytest.raises(RecoveryRestoreError, match="not empty"):
         await RecoveryKitService(src_db, src_dir).restore_kit(kit, PASS)
+
+
+async def test_refuse_box_with_peers_but_no_identity(populated, empty_target):
+    # A partially-provisioned box (a peer row, no identity) must still refuse —
+    # else the salt overwrite would orphan the peer's undecryptable wrapped keys.
+    src_dir, src_db, iid, seed = populated
+    dst_dir, dst_db = empty_target
+    km = KeyManager.from_data_dir(dst_dir)
+    await _seed_remote_instance(dst_db, km)
+    kit = await RecoveryKitService(src_db, src_dir).build_kit(PASS)
+    with pytest.raises(RecoveryRestoreError, match="not empty"):
+        await RecoveryKitService(dst_db, dst_dir).restore_kit(kit, PASS)
+
+
+async def test_malformed_payload_rejected(empty_target):
+    # An authenticated kit whose payload shape is wrong must raise the domain
+    # error, never a bare KeyError/AttributeError. Seal a bogus payload.
+    dst_dir, dst_db = empty_target
+    bad = seal_kit(
+        orjson.dumps({"kek_salt": "not-b64!!", "tables": "nope"}),
+        PASS,
+        instance_id="x" * 16,
+        created_at="2026-06-14T00:00:00+00:00",
+    )
+    with pytest.raises(RecoveryRestoreError):
+        await RecoveryKitService(dst_db, dst_dir).restore_kit(bad, PASS)
+    # Nothing was written.
+    assert (
+        await dst_db.fetchone("SELECT 1 FROM instance_identity WHERE id='self'")
+    ) is None
 
 
 async def test_wrong_passphrase_no_rows(populated, empty_target):
