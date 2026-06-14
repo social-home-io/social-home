@@ -284,6 +284,7 @@ from .services.gfs_connection_service import GfsConnectionService
 from .services.public_space_discovery_service import PublicSpaceDiscoveryService
 from .services.push_service import PushService, load_or_create_vapid
 from .services.recovery_kit_service import RecoveryKitService
+from .services.recovery_reconnect_service import RecoveryReconnectService
 from .services.report_service import ReportService
 from .services.realtime_service import RealtimeService
 from .services.search_service import SearchService
@@ -2788,6 +2789,20 @@ def create_app(config: Config | None = None) -> web.Application:
         # Wire any extra services the adapter provides into the app dict.
         for key, svc in platform_adapter.get_extra_services().items():
             app[key] = svc
+
+        # 7b. One-shot post-restore peer reconnect. Runs after the adapter's
+        #     federation base is set (above) and after the federation stack is
+        #     wired (url_update_outbound exists). On the FIRST boot after a
+        #     Recovery Kit restore it fans URL_UPDATED out to every confirmed
+        #     peer so they update our inbox URL; guarded to run exactly once.
+        recovery_reconnect_service = RecoveryReconnectService(
+            db, app[K.url_update_outbound_key], platform_adapter
+        )
+        app[K.recovery_reconnect_service_key] = recovery_reconnect_service
+        try:
+            await recovery_reconnect_service.maybe_reconnect()
+        except Exception:
+            log.warning("post-restore reconnect hook failed", exc_info=True)
 
         # 8. Default-calendar backfill. Runs after the adapter (so the
         #    headless ``provision_admin`` path is included) and after the
