@@ -155,9 +155,18 @@ def _parse_and_validate_header(kit_bytes: bytes) -> dict:
     if obj["kit_version"] != RECOVERY_KIT_VERSION:
         raise RecoveryKitError("unsupported recovery kit version")
 
-    if obj["kdf_suite"] not in SUPPORTED_RECOVERY_KDF_SUITES:
+    # A non-string suite (JSON list/object) is not a supported suite — guard
+    # the type first so the ``in frozenset`` check can't raise an unhandled
+    # ``TypeError: unhashable type`` on untrusted file bytes (fail closed).
+    if (
+        not isinstance(obj["kdf_suite"], str)
+        or obj["kdf_suite"] not in SUPPORTED_RECOVERY_KDF_SUITES
+    ):
         raise UnsupportedRecoverySuite("unsupported recovery kit kdf_suite")
-    if obj["aead_suite"] not in SUPPORTED_RECOVERY_AEAD_SUITES:
+    if (
+        not isinstance(obj["aead_suite"], str)
+        or obj["aead_suite"] not in SUPPORTED_RECOVERY_AEAD_SUITES
+    ):
         raise UnsupportedRecoverySuite("unsupported recovery kit aead_suite")
 
     return obj

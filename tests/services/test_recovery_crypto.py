@@ -96,6 +96,18 @@ def test_unknown_aead_suite_raises_unsupported() -> None:
         rc.read_kit_header(kit)
 
 
+def test_non_string_suite_raises_unsupported_not_typeerror() -> None:
+    # A JSON list/object for a suite field is unhashable; the membership
+    # check must not crash with an unhandled TypeError on untrusted bytes.
+    for field in ("kdf_suite", "aead_suite"):
+        for bogus in ([rc.RECOVERY_KDF_SUITE_SCRYPT], {"x": 1}):
+            kit = _mutate_header(_seal(), **{field: bogus})
+            with pytest.raises(rc.UnsupportedRecoverySuite):
+                rc.unseal_kit(kit, PASSPHRASE)
+            with pytest.raises(rc.UnsupportedRecoverySuite):
+                rc.read_kit_header(kit)
+
+
 def test_wrong_version_raises() -> None:
     kit = _mutate_header(_seal(), kit_version=999)
     with pytest.raises(rc.RecoveryKitError):
