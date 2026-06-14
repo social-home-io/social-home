@@ -18,6 +18,7 @@ from .backup import (
     BackupPostView,
     BackupPreView,
 )
+from .recovery import RecoveryKitExportView
 from .blocks import BlockCollectionView, BlockDetailView
 from .bazaar import (
     BazaarBidAcceptView,
@@ -1079,6 +1080,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/backup/post_backup", BackupPostView)
     app.router.add_view("/api/backup/export", BackupExportView)
     app.router.add_view("/api/backup/import", BackupImportView)
+    app.router.add_view("/api/recovery-kit", RecoveryKitExportView)
 
     # ── Public spaces ───────────────────────────────────────────────────
     app.router.add_view("/api/public_spaces", PublicSpaceCollectionView)

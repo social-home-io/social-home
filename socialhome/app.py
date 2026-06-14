@@ -283,6 +283,7 @@ from .services.presence_service import PresenceService
 from .services.gfs_connection_service import GfsConnectionService
 from .services.public_space_discovery_service import PublicSpaceDiscoveryService
 from .services.push_service import PushService, load_or_create_vapid
+from .services.recovery_kit_service import RecoveryKitService
 from .services.report_service import ReportService
 from .services.realtime_service import RealtimeService
 from .services.search_service import SearchService
@@ -1439,6 +1440,7 @@ def create_app(config: Config | None = None) -> web.Application:
     # Backup service — adapter-agnostic. HA Supervisor calls pre/post
     # snapshot; standalone operators call via API or cron.
     backup_service = BackupService(db, config.media_path, schema_version=1)
+    recovery_kit_service = RecoveryKitService(db, config.data_dir)
 
     # ── Idempotency + reconnect orchestration ────────────────────────────
     idempotency_cache = IdempotencyCache(ttl_seconds=3600)
@@ -1863,6 +1865,7 @@ def create_app(config: Config | None = None) -> web.Application:
     app[K.theme_service_key] = theme_service
     app[K.storage_quota_service_key] = storage_quota
     app[K.backup_service_key] = backup_service
+    app[K.recovery_kit_service_key] = recovery_kit_service
     app[K.idempotency_cache_key] = idempotency_cache
     app[K.reconnect_queue_key] = reconnect_queue
     app[K.gfs_connection_service_key] = gfs_connection_service
