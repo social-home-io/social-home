@@ -533,6 +533,48 @@ def test_legacy_assertion_without_user_binding_unchanged():
     verify_user_identity_assertion(a, kp.public_key)
 
 
+def test_dual_assertion_key_transplant_rejected():
+    """A transplant attack must fail: an attacker who holds a victim's
+    legitimately instance-signed, binding-bearing assertion swaps in their own
+    user_identity_public_key and forges a VALID self-sig with their own seed,
+    leaving the instance signature untouched. Because the instance signature
+    now commits to the user pubkey, the swap breaks the instance sig and the
+    whole assertion is rejected — binding the attacker key to the victim's
+    user_id is impossible without the household's instance seed.
+    """
+    a, instance_pubkey, _victim_kp = _make_dual_assertion()
+    attacker = generate_identity_keypair()
+    # Attacker forges a PROPER self-sig for their own key over the recomputed
+    # user-identity signed bytes (proves possession of the attacker key).
+    body = user_identity_signed_bytes(
+        user_id=a.user_id,
+        instance_id=a.instance_id,
+        username=a.username,
+        user_public_key=attacker.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    forged_self_sig = b64url_encode(sign_user_self(attacker.private_key, body))
+    tampered = dataclasses.replace(
+        a,
+        user_identity_public_key=attacker.public_key.hex(),
+        user_signature=forged_self_sig,
+        # instance `signature` deliberately left untouched.
+    )
+    # Self-sig is now internally valid, but the instance sig no longer covers
+    # the swapped pubkey -> rejected.
+    with pytest.raises(ValueError, match="signature"):
+        verify_user_identity_assertion(tampered, instance_pubkey)
+
+
+def test_dual_assertion_malformed_pubkey_hex_raises_domain_error():
+    """A malformed (non-hex) user_identity_public_key raises a clear domain
+    ValueError, not a raw bytes.fromhex 'non-hexadecimal number' error."""
+    a, instance_pubkey, _user_kp = _make_dual_assertion()
+    bad = dataclasses.replace(a, user_identity_public_key="zz not hex zz")
+    with pytest.raises(ValueError, match="malformed user identity binding"):
+        verify_user_identity_assertion(bad, instance_pubkey)
+
+
 def test_dual_assertion_missing_suite_defaults_to_ed25519():
     """A first-revision payload that carries the pubkey but omits user_sig_suite
     defaults to ed25519 (the documented tripwire) and verifies."""

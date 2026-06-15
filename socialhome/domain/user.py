@@ -204,14 +204,20 @@ class UserIdentityAssertion:
 
     The ``signature`` is a base64url-encoded Ed25519 signature over the
     canonical byte encoding in
-    :func:`socialhome.crypto.user_assertion_signed_bytes` — the **INSTANCE**
-    signature, proving "this user is hosted at ``instance_id``".
+    :func:`socialhome.crypto.instance_assertion_signed_bytes` — the **INSTANCE**
+    signature, proving "this user is hosted at ``instance_id``". For a legacy
+    assertion those bytes are exactly
+    :func:`socialhome.crypto.user_assertion_signed_bytes`; for a binding-bearing
+    assertion they are extended to also commit to the user pubkey + suite, so
+    the household vouches for the *specific* user key (closing the key-transplant
+    flaw: a swapped user key can't reuse the instance signature).
 
     The optional ``user_*`` binding fields carry a second, **USER** self-
     signature proving "the user holds their own identity key" (independent of
     the hosting instance). When present, both signatures are checked by
-    :func:`socialhome.crypto.verify_user_identity_assertion`. They are
-    nullable / defaulted ``None`` so a legacy or first-revision payload that
+    :func:`socialhome.crypto.verify_user_identity_assertion` — the instance sig
+    over the extended bytes (binding) and the user self-sig (possession). They
+    are nullable / defaulted ``None`` so a legacy or first-revision payload that
     omits them still parses (backward compat); a present
     ``user_identity_public_key`` is what gates the second check.
 

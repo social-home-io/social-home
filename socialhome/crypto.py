@@ -289,6 +289,48 @@ def user_assertion_signed_bytes(
     )
 
 
+def instance_assertion_signed_bytes(
+    *,
+    user_id: str,
+    instance_id: str,
+    username: str,
+    display_name: str,
+    issued_at: str,
+    user_identity_public_key: bytes | None,
+    user_sig_suite: str | None,
+) -> bytes:
+    """Bytes the INSTANCE signature covers.
+
+    For a legacy assertion (no user binding) this is **exactly** the legacy
+    :func:`user_assertion_signed_bytes` — byte-for-byte backward compatible
+    with existing v24 assertions.
+
+    For a binding-bearing assertion (``user_identity_public_key`` present) the
+    legacy bytes are **extended** with the user pubkey + suite under a
+    ``user-binding`` domain separator, so the household vouches for the
+    *specific* user key. This closes the transplant flaw: an attacker who
+    swaps in their own user pubkey can no longer re-use the victim's instance
+    signature, because that signature now commits to the user key. The
+    ``_lv``-prefixed domain tag can't collide with the legacy tail (whose
+    final field is the ``issued_at`` value), so the extension is unambiguous.
+    """
+    legacy = user_assertion_signed_bytes(
+        user_id,
+        instance_id,
+        username,
+        display_name,
+        issued_at,
+    )
+    if user_identity_public_key is None:
+        return legacy
+    return (
+        legacy
+        + _lv(b"user-binding")
+        + _lv(user_identity_public_key)
+        + _lv((user_sig_suite or USER_SIG_SUITE_ED25519).encode("utf-8"))
+    )
+
+
 def sign_user_assertion(
     seed: bytes,
     *,
@@ -297,14 +339,24 @@ def sign_user_assertion(
     username: str,
     display_name: str,
     issued_at: str,
+    user_identity_public_key: bytes | None = None,
+    user_sig_suite: str | None = None,
 ) -> str:
-    """Produce the base64url Ed25519 signature for a user identity assertion."""
-    payload = user_assertion_signed_bytes(
+    """Produce the base64url Ed25519 INSTANCE signature for a user identity
+    assertion.
+
+    When ``user_identity_public_key`` is supplied the signed bytes are extended
+    to commit to the user binding (see :func:`instance_assertion_signed_bytes`);
+    otherwise the legacy bytes are signed verbatim.
+    """
+    payload = instance_assertion_signed_bytes(
         user_id=user_id,
         instance_id=instance_id,
         username=username,
         display_name=display_name,
         issued_at=issued_at,
+        user_identity_public_key=user_identity_public_key,
+        user_sig_suite=user_sig_suite,
     )
     return b64url_encode(sign_ed25519(seed, payload))
 
@@ -334,22 +386,15 @@ def build_user_identity_assertion(
     hosting instance). When either is absent the legacy assertion is produced
     verbatim — all ``user_*`` binding fields stay ``None``.
     """
-    signature = sign_user_assertion(
-        instance_seed,
-        user_id=user_id,
-        instance_id=instance_id,
-        username=username,
-        display_name=display_name,
-        issued_at=issued_at,
-    )
-
     user_identity_public_key: str | None = None
     suite: str | None = None
     user_signature: str | None = None
+    binding_pubkey: bytes | None = None
     if user_seed is not None and user_public_key is not None:
         validate_user_sig_suite(user_sig_suite)
         user_identity_public_key = user_public_key.hex()
         suite = user_sig_suite
+        binding_pubkey = user_public_key
         body = user_identity_signed_bytes(
             user_id=user_id,
             instance_id=instance_id,
@@ -358,6 +403,20 @@ def build_user_identity_assertion(
             user_sig_suite=user_sig_suite,
         )
         user_signature = b64url_encode(sign_user_self(user_seed, body))
+
+    # The INSTANCE signature commits to the user binding when one is present
+    # (binding_pubkey != None) so a transplanted user key can't re-use it; a
+    # legacy assertion (binding_pubkey == None) signs the legacy bytes verbatim.
+    signature = sign_user_assertion(
+        instance_seed,
+        user_id=user_id,
+        instance_id=instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=issued_at,
+        user_identity_public_key=binding_pubkey,
+        user_sig_suite=suite,
+    )
 
     return UserIdentityAssertion(
         user_id=user_id,
@@ -409,22 +468,13 @@ def verify_user_identity_assertion(
     if assertion.user_id != expected_user_id:
         raise ValueError("user_id does not match instance public key + username")
 
-    payload = user_assertion_signed_bytes(
-        user_id=assertion.user_id,
-        instance_id=assertion.instance_id,
-        username=assertion.username,
-        display_name=assertion.display_name,
-        issued_at=assertion.issued_at,
-    )
-    if not verify_ed25519(
-        sender_instance_public_key,
-        payload,
-        b64url_decode(assertion.signature),
-    ):
-        raise ValueError("Invalid user identity assertion signature")
-
-    # Per-user identity binding (independent user identity). Only checked when
-    # the assertion actually carries a user pubkey — absence == legacy payload.
+    # Parse + validate the per-user identity binding up front (when present) so
+    # the INSTANCE signature can be verified over bytes that COMMIT to the user
+    # pubkey. Absence of a pubkey == legacy payload: instance sig covers the
+    # legacy bytes exactly, no user self-sig.
+    user_pubkey: bytes | None = None
+    user_self_sig: str | None = None
+    suite: str | None = None
     if assertion.user_identity_public_key is not None:
         # A first-revision payload may omit the suite; default to ed25519 (the
         # documented tripwire). An explicit unknown suite must NOT fall back —
@@ -433,18 +483,42 @@ def verify_user_identity_assertion(
         validate_user_sig_suite(suite)
         if assertion.user_signature is None:
             raise ValueError("user identity binding missing user_signature")
-        user_pubkey = bytes.fromhex(assertion.user_identity_public_key)
+        user_self_sig = assertion.user_signature
+        try:
+            user_pubkey = bytes.fromhex(assertion.user_identity_public_key)
+        except ValueError as exc:
+            raise ValueError("malformed user identity binding") from exc
+
+    payload = instance_assertion_signed_bytes(
+        user_id=assertion.user_id,
+        instance_id=assertion.instance_id,
+        username=assertion.username,
+        display_name=assertion.display_name,
+        issued_at=assertion.issued_at,
+        user_identity_public_key=user_pubkey,
+        user_sig_suite=suite,
+    )
+    if not verify_ed25519(
+        sender_instance_public_key,
+        payload,
+        b64url_decode(assertion.signature),
+    ):
+        raise ValueError("Invalid user identity assertion signature")
+
+    # The instance sig (above) now vouches for the specific user key when a
+    # binding is present; the user self-sig additionally proves possession.
+    if user_pubkey is not None and user_self_sig is not None:
         body = user_identity_signed_bytes(
             user_id=assertion.user_id,
             instance_id=assertion.instance_id,
             username=assertion.username,
             user_public_key=user_pubkey,
-            user_sig_suite=suite,
+            user_sig_suite=suite or USER_SIG_SUITE_ED25519,
         )
         if not verify_user_self(
             user_pubkey,
             body,
-            b64url_decode(assertion.user_signature),
+            b64url_decode(user_self_sig),
         ):
             raise ValueError("Invalid user identity binding self-signature")
 
