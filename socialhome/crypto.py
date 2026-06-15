@@ -203,6 +203,63 @@ def x25519_exchange(private_key: bytes, peer_public_key: bytes) -> bytes:
     return sk.exchange(pk)
 
 
+# ─── User-identity signature suite tag (independent user identity) ─────────
+
+
+USER_SIG_SUITE_ED25519: str = "ed25519"
+SUPPORTED_USER_SIG_SUITES: frozenset[str] = frozenset({USER_SIG_SUITE_ED25519})
+
+
+class UnsupportedUserSigSuite(ValueError):
+    """Raised when a user-identity assertion advertises a `user_sig_suite` this
+    build doesn't know. Receivers MUST reject rather than fall back to a default
+    (downgrade protection once the Phase-2 hybrid `ed25519+mldsa65` lands). PQ
+    migration grows the frozenset + ships the parallel signature; wire shape
+    unchanged."""
+
+
+def validate_user_sig_suite(suite: str) -> None:
+    if suite not in SUPPORTED_USER_SIG_SUITES:
+        raise UnsupportedUserSigSuite(
+            f"user_sig_suite={suite!r} not recognised; expected one of "
+            f"{SUPPORTED_USER_SIG_SUITES}",
+        )
+
+
+# ─── User self-signature (independent user identity Phase 1) ───────────────
+
+
+def user_identity_signed_bytes(
+    *,
+    user_id: str,
+    instance_id: str,
+    username: str,
+    user_public_key: bytes,
+    user_sig_suite: str,
+) -> bytes:
+    """Canonical bytes the USER self-signature covers (NUL-separated, mirroring
+    user_assertion_signed_bytes). Binds user_id, instance, username, user pubkey,
+    suite."""
+    return b"\x00".join(
+        [
+            b"sh/user-identity/v1",
+            user_id.encode("utf-8"),
+            instance_id.encode("utf-8"),
+            username.encode("utf-8"),
+            user_public_key,
+            user_sig_suite.encode("utf-8"),
+        ]
+    )
+
+
+def sign_user_self(user_seed: bytes, message: bytes) -> bytes:
+    return sign_ed25519(user_seed, message)
+
+
+def verify_user_self(user_public_key: bytes, message: bytes, signature: bytes) -> bool:
+    return verify_ed25519(user_public_key, message, signature)
+
+
 # ─── UserIdentityAssertion encoding (§4.1.4) ──────────────────────────────
 
 

@@ -8,7 +8,10 @@ import pytest
 
 from socialhome.crypto import (
     REPLAY_CACHE_WINDOW,
+    SUPPORTED_USER_SIG_SUITES,
+    USER_SIG_SUITE_ED25519,
     ReplayCache,
+    UnsupportedUserSigSuite,
     b64url_decode,
     b64url_encode,
     derive_instance_id,
@@ -21,8 +24,12 @@ from socialhome.crypto import (
     sha256_hex,
     sign_ed25519,
     sign_user_assertion,
+    sign_user_self,
+    user_identity_signed_bytes,
+    validate_user_sig_suite,
     verify_ed25519,
     verify_user_identity_assertion,
+    verify_user_self,
     x25519_exchange,
 )
 from socialhome.domain.user import UserIdentityAssertion
@@ -376,3 +383,32 @@ def test_replay_cache_prune_handles_naive_persisted_entries():
     assert rc.seen("fresh-msg") is False
     # The persisted entry is still considered seen (well within window).
     assert rc.seen("persisted-msg") is True
+
+
+# ─── User-identity self-signature (independent user identity Phase 1) ───────
+
+
+def test_user_sig_suite_contract():
+    """USER_SIG_SUITE tag contract: ed25519 only, reject unknown suites."""
+    assert USER_SIG_SUITE_ED25519 == "ed25519"
+    assert USER_SIG_SUITE_ED25519 in SUPPORTED_USER_SIG_SUITES
+    assert "ed25519+mldsa65" not in SUPPORTED_USER_SIG_SUITES
+    assert issubclass(UnsupportedUserSigSuite, ValueError)
+    assert validate_user_sig_suite(USER_SIG_SUITE_ED25519) is None
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite("bogus")
+
+
+def test_user_self_sign_roundtrip():
+    """USER self-signature round-trips and rejects a tampered body."""
+    kp = generate_identity_keypair()
+    body = user_identity_signed_bytes(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        user_public_key=kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    sig = sign_user_self(kp.private_key, body)
+    assert verify_user_self(kp.public_key, body, sig) is True
+    assert verify_user_self(kp.public_key, body + b"x", sig) is False
