@@ -143,6 +143,9 @@ class UserService:
         # future rename leaves user_id stable (§v_26). Existing rows keep
         # their username-derived id via the migration-0041 backfill — the
         # reactivate branch below never re-derives.
+        #
+        # identity_anchor is derived ONCE at provision and FROZEN — never
+        # mutate; user_id depends on it.
         identity_anchor = uuid.uuid4().hex
         user_id = derive_user_id(self._own_instance_pk, identity_anchor)
 

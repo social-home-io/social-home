@@ -103,11 +103,15 @@ central registry is involved.
 - **`instance_id`** — derived from the HFS's long-term Ed25519 public
   key (`derive_instance_id(public_key_bytes)`). Generated once on first
   startup and never reassigned. Stored in `instance_identity`.
-- **`user_id`** — derived from the **home instance's** public key
-  plus the user's local username, with a null-byte separator
-  (`derive_user_id(instance_pk, username)`). Globally unique,
-  cryptographically bound to the home instance, and survives across
-  spaces and DMs.
+- **`user_id`** — derived from the **home instance's** public key plus
+  the user's immutable **`identity_anchor`**, with a null-byte separator
+  (`derive_user_id(instance_pk, identity_anchor)`, v_26). The anchor is a
+  uuid4 for users created on v_26+ (standalone) and the **frozen username**
+  for existing-and haos users — so `user_id` is bound to an opaque per-user
+  value, **not** the human name. This frees the human name for a later
+  mutable login + `@handle` without re-keying the user's federated identity
+  (a rename leaves `user_id` stable). Globally unique, cryptographically
+  bound to the home instance, and survives across spaces and DMs.
 - **`UserIdentityAssertion`** — when an instance refers to one of
   its users in a federation event (`USERS_SYNC`, embedded in space
   events, etc.), it ships a signed assertion binding the `user_id`
@@ -135,12 +139,19 @@ Phase 1 is **behaviour-neutral and portable-by-design**: the legacy
 `user_id` (`derive_user_id(home_instance_pk, username)`) stays the
 *canonical* address for every user-scoped surface, and the per-user key
 is additive metadata — a peer that ignores it works exactly as before.
-The roadmap intent is later-phase: resolve / cache the binding on demand,
-then make a user's identity **portable** so a member can move out of one
-household and carry their key (a rename away from the instance-derived
-`user_id`, and move-out of the user). Migration
-`0040_user_identity_keys.sql` provisions the key columns;
-`infrastructure/user_identity.py` mints them. See
+**Phase 2** (capability v_26) takes the first portability step: `user_id`
+now derives from an immutable `identity_anchor` (uuid for new users, frozen
+username for existing/haos) instead of the mutable username, so the human
+name can later become a mutable login + `@handle` without re-keying. The
+anchor is carried in the binding and committed into **both** signatures;
+verify re-derives `user_id` from it (sub-v_26 falls back to username — see
+*Migration tail* in the protocol doc). The remaining roadmap intent is
+later-phase: resolve / cache the binding on demand, then make a user's
+identity fully **portable** so a member can move out of one household and
+carry their key. Migrations `0040_user_identity_keys.sql` (key columns) and
+`0041_user_identity_anchor.sql` (the `identity_anchor` columns) provision
+the storage; `infrastructure/user_identity.py` mints the keys and
+`services/user_service.py` mints the anchor. See
 [`protocol/user-identity.md`](protocol/user-identity.md).
 
 ### Post-quantum migration (§25.8)
