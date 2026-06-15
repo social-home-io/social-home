@@ -114,6 +114,35 @@ central registry is involved.
   to the username + display name. Receivers verify the signature
   with the home instance's public key on every inbound event.
 
+#### Instance identity vs. per-user identity
+
+The two identities above play different roles:
+
+- **Instance identity** (the `instance_id` key) is the **transport +
+  trust root**. It signs every federation envelope, anchors pairing, and
+  is what `from_instance` is bound to. It belongs to the *household*, not
+  to any one member.
+- **Per-user identity** (independent user identity, **Phase 1** —
+  capability v_25) gives each household member their **own** Ed25519
+  keypair, distinct from the instance key. A household publishes a
+  user's public key plus a *dual-signed binding* (instance signature
+  vouching for the specific key + user self-signature proving
+  possession) inside the existing `USERS_SYNC` / `USER_UPDATED` payloads;
+  receivers verify it against the sender's pinned instance key and store
+  the remote user's public key on `remote_users`.
+
+Phase 1 is **behaviour-neutral and portable-by-design**: the legacy
+`user_id` (`derive_user_id(home_instance_pk, username)`) stays the
+*canonical* address for every user-scoped surface, and the per-user key
+is additive metadata — a peer that ignores it works exactly as before.
+The roadmap intent is later-phase: resolve / cache the binding on demand,
+then make a user's identity **portable** so a member can move out of one
+household and carry their key (a rename away from the instance-derived
+`user_id`, and move-out of the user). Migration
+`0040_user_identity_keys.sql` provisions the key columns;
+`infrastructure/user_identity.py` mints them. See
+[`protocol/user-identity.md`](protocol/user-identity.md).
+
 ### Post-quantum migration (§25.8)
 
 Identity is **classical Ed25519 by default**, with optional **ML-DSA-65
@@ -137,8 +166,13 @@ the bootstrap is in `infrastructure/key_manager.py`.
   generation, KEK encryption of private key material at rest.
 - `socialhome/repositories/federation_repo.py` — `instance_identity`
   + `remote_instances` reads/writes.
+- `socialhome/infrastructure/user_identity.py` +
+  `socialhome/services/user_identity_binding.py` — per-user identity key
+  minting/backfill and the outbound binding fields (Phase 1).
 - See [`protocol/pairing.md`](./protocol/pairing.md) for the
-  pairing handshake that bootstraps trust between two instances.
+  pairing handshake that bootstraps trust between two instances, and
+  [`protocol/user-identity.md`](./protocol/user-identity.md) for the
+  per-user identity binding carried on the roster.
 
 ## Progressive sync (§4.2)
 
