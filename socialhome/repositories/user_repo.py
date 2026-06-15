@@ -36,6 +36,13 @@ class AbstractUserRepo(Protocol):
     async def set_admin(self, username: str, is_admin: bool) -> None: ...
     async def set_last_seen(self, user_id: str, at: str) -> None: ...
     async def set_tz(self, username: str, tz: str) -> None: ...
+    async def set_user_identity_key(
+        self,
+        username: str,
+        *,
+        public_key_hex: str,
+        private_key_wrapped: str,
+    ) -> None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
 
     # Remote users --------------------------------------------------------
@@ -261,6 +268,25 @@ class SqliteUserRepo:
         await self._db.enqueue(
             "UPDATE users SET tz=? WHERE username=?",
             (tz, username),
+        )
+
+    async def set_user_identity_key(
+        self,
+        username: str,
+        *,
+        public_key_hex: str,
+        private_key_wrapped: str,
+    ) -> None:
+        """Persist a user's KEK-wrapped Ed25519 identity keypair (§Phase 1).
+
+        ``public_key_hex`` is the hex-encoded 32-byte public key (only the
+        public half ever federates); ``private_key_wrapped`` is the seed
+        sealed under the instance KEK via :class:`KeyManager`.
+        """
+        await self._db.enqueue(
+            "UPDATE users SET user_identity_public_key=?, "
+            "user_identity_private_key=? WHERE username=?",
+            (public_key_hex, private_key_wrapped, username),
         )
 
     async def soft_delete(self, username: str, grace_days: int = 30) -> None:

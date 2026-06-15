@@ -45,6 +45,23 @@ async def test_save_and_get_by_username(env):
     assert got.user_id == u.user_id
 
 
+async def test_set_user_identity_key_persists_both_halves(env):
+    """set_user_identity_key writes the public + KEK-wrapped private columns."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex="ab" * 32,
+        private_key_wrapped="wrapped-seed",
+    )
+    row = await env.db.fetchone(
+        "SELECT user_identity_public_key, user_identity_private_key "
+        "FROM users WHERE username=?",
+        ("alice",),
+    )
+    assert row["user_identity_public_key"] == "ab" * 32
+    assert row["user_identity_private_key"] == "wrapped-seed"
+
+
 async def test_get_missing_user_returns_none(env):
     """Getting a non-existent username returns None."""
     got = await env.user_repo.get("nobody")

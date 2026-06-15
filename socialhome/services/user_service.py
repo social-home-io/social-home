@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import orjson
 
-from ..crypto import derive_user_id
+from ..crypto import derive_user_id, generate_identity_keypair
 from ..domain.events import (
     UserBlocked,
     UserDeprovisioned,
@@ -33,6 +33,7 @@ from ..domain.events import (
 )
 from ..domain.user import RESERVED_USERNAMES, User, UserStatus
 from ..infrastructure.event_bus import EventBus
+from ..infrastructure.key_manager import KeyManager
 from ..media.image_processor import ImageProcessor
 from ..repositories.profile_picture_repo import (
     AbstractProfilePictureRepo,
@@ -69,7 +70,7 @@ _UNSET = _Unset()
 class UserService:
     """Provision, update, and query local users."""
 
-    __slots__ = ("_repo", "_bus", "_own_instance_pk", "_pictures")
+    __slots__ = ("_repo", "_bus", "_own_instance_pk", "_pictures", "_key_manager")
 
     def __init__(
         self,
@@ -78,11 +79,13 @@ class UserService:
         *,
         own_instance_public_key: bytes,
         profile_picture_repo: AbstractProfilePictureRepo | None = None,
+        key_manager: KeyManager | None = None,
     ) -> None:
         self._repo = repo
         self._bus = bus
         self._own_instance_pk = own_instance_public_key
         self._pictures = profile_picture_repo
+        self._key_manager = key_manager
 
     def attach_profile_picture_repo(
         self,
@@ -91,6 +94,16 @@ class UserService:
         """Wire the picture repo post-construction (tests may build a
         bare :class:`UserService` first and attach later)."""
         self._pictures = repo
+
+    def attach_key_manager(self, key_manager: KeyManager) -> None:
+        """Wire the instance KEK post-construction.
+
+        The KEK only exists after ``_on_startup`` (the DB isn't open at
+        ``create_app`` time), so a :class:`UserService` built earlier
+        attaches it later — mirrors ``SpaceRepo.attach_key_manager``.
+        Once attached, :meth:`provision` mints a per-user identity key.
+        """
+        self._key_manager = key_manager
 
     # ── Provisioning ────────────────────────────────────────────────────
 
@@ -153,6 +166,18 @@ class UserService:
             source=source,
         )
         await self._repo.save(user)
+        # Mint a KEK-wrapped Ed25519 identity key for the new user so they
+        # have one immediately, not at the next startup backfill. Only the
+        # public half ever federates. Skipped when no KEK is attached (a
+        # bare service in early-boot wiring) — the startup backfill catches
+        # those rows once the KEK exists.
+        if self._key_manager is not None:
+            kp = generate_identity_keypair()
+            await self._repo.set_user_identity_key(
+                username,
+                public_key_hex=kp.public_key.hex(),
+                private_key_wrapped=self._key_manager.encrypt(kp.private_key),
+            )
         await self._bus.publish(
             UserProvisioned(
                 user_id=user.user_id,
