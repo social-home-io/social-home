@@ -72,16 +72,39 @@ _SIGNED_FIELDS: tuple[str, ...] = (
 )
 
 
+#: ``identity_anchor`` is the ONLY signed field carried *present-or-absent*
+#: rather than *present-with-None-default*. It was added after v_25 and the GFS
+#: public/global relay path has no proto-version negotiation, so an absent
+#: anchor MUST reproduce the exact v_25 signing bytes (no ``identity_anchor``
+#: key at all) — otherwise a not-yet-upgraded subscriber recomputes the old
+#: layout, the author sig mismatches, and even legacy username-anchored posts
+#: are silently dropped during rollout. Only uuid-anchored (new) authors
+#: include it, and those legitimately verify on v_26+ only (the migration tail).
+_OPTIONAL_OMITTED_WHEN_ABSENT: frozenset[str] = frozenset({"identity_anchor"})
+
+
 def author_signing_bytes(inner: dict) -> bytes:
     """Return the canonical, domain-separated bytes the author signs / the
     receiver verifies for one relayed public-space post.
 
     ``inner`` is the decrypted inner payload (with or without ``author_sig`` —
-    it is never read). Missing fields default to ``None`` so producer and
-    consumer agree even when an optional field is absent. The body is compact,
-    sorted JSON so the encoding is deterministic across both sides.
+    it is never read). Most fields default to ``None`` so producer and consumer
+    agree even when an optional field is absent. ``identity_anchor`` is the lone
+    exception: it is OMITTED from the body entirely when absent/None (see
+    :data:`_OPTIONAL_OMITTED_WHEN_ABSENT`), so a legacy author's bytes stay
+    byte-identical to the pre-anchor (v_25) layout. The body is compact, sorted
+    JSON so the encoding is deterministic across both sides.
     """
-    body = {k: inner.get(k) for k in _SIGNED_FIELDS}
+    body: dict[str, object] = {}
+    for k in _SIGNED_FIELDS:
+        if k in _OPTIONAL_OMITTED_WHEN_ABSENT:
+            # Omit entirely when absent/None — never write a null key, so the
+            # signing bytes match the layout that predates this field.
+            value = inner.get(k)
+            if value is not None:
+                body[k] = value
+        else:
+            body[k] = inner.get(k)
     canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return _AUTHOR_SIG_DOMAIN + canonical
 
@@ -110,9 +133,6 @@ def build_signed_author_inner(
         "author_user_id": post.author,
         "author_pk": author_pk.hex(),
         "author_username": author_username,
-        # The derivation input for ``author_user_id`` (uuid for new users);
-        # None for legacy authors whose user_id derives from the username.
-        "identity_anchor": author_identity_anchor,
         "type": post.type.value,
         "content": post.content,
         "media_url": post.media_url,
@@ -127,6 +147,12 @@ def build_signed_author_inner(
             "lon": post.location.lon,
             "label": post.location.label,
         }
+    # The derivation input for ``author_user_id`` (a uuid for new users). OMITTED
+    # entirely for legacy authors whose user_id derives from the username, so the
+    # signed bytes stay byte-identical to the pre-anchor (v_25) layout and a
+    # not-yet-upgraded subscriber still verifies their posts during rollout.
+    if author_identity_anchor is not None:
+        inner["identity_anchor"] = author_identity_anchor
     inner["author_sig"] = b64url_encode(
         sign_ed25519(author_identity_seed, author_signing_bytes(inner))
     )

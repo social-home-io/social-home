@@ -227,3 +227,67 @@ async def test_0041_identity_anchor_columns(tmp_path):
     )
 
     await db.shutdown()
+
+
+def test_0041_backfills_identity_anchor_to_username(tmp_path):
+    """Migration 0041 backfills every existing ``users`` row's NULL
+    ``identity_anchor`` to its current username, so the user_id derivation
+    (which keys off the anchor when present) is unchanged for legacy accounts.
+
+    Applies migrations incrementally: everything up to 0040 runs, a user row
+    with NULL identity_anchor is seeded, then 0041 runs and the backfill is
+    asserted. This is the make-or-break statement — a silent regression here
+    would re-key every existing user_id."""
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        all_migrations = discover_migrations(MIGRATIONS_DIR)
+        pre = [m for m in all_migrations if m.version < 41]
+        the_0041 = [m for m in all_migrations if m.version == 41]
+        assert the_0041, "migration 0041 not found"
+
+        # Apply everything up to (but not including) 0041.
+        _ensure_schema_version_for_test(conn)
+        for migration in pre:
+            with conn:
+                migration.apply(conn)
+
+        # The column does not exist yet — seed a legacy row (anchor NULL).
+        users_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        assert "identity_anchor" not in users_cols, (
+            "identity_anchor must not exist before 0041"
+        )
+        conn.execute(
+            "INSERT INTO users (username, user_id, display_name) VALUES (?,?,?)",
+            ("legacy_alice", "uid-alice", "Alice"),
+        )
+        conn.commit()
+
+        # Apply 0041.
+        with conn:
+            the_0041[0].apply(conn)
+
+        row = conn.execute(
+            "SELECT identity_anchor FROM users WHERE username = ?",
+            ("legacy_alice",),
+        ).fetchone()
+        assert row["identity_anchor"] == "legacy_alice", (
+            "0041 must backfill identity_anchor to the username for legacy rows"
+        )
+    finally:
+        conn.close()
+
+
+def _ensure_schema_version_for_test(conn: sqlite3.Connection) -> None:
+    """Create the schema_version stamp table the runner relies on (the
+    incremental backfill test applies migrations without run_migrations)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version     INTEGER PRIMARY KEY,
+            description TEXT,
+            applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.commit()
