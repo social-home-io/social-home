@@ -219,7 +219,7 @@ class UnsupportedUserSigSuite(ValueError):
 
 
 def validate_user_sig_suite(suite: str) -> None:
-    if suite not in SUPPORTED_USER_SIG_SUITES:
+    if not isinstance(suite, str) or suite not in SUPPORTED_USER_SIG_SUITES:
         raise UnsupportedUserSigSuite(
             f"user_sig_suite={suite!r} not recognised; expected one of "
             f"{SUPPORTED_USER_SIG_SUITES}",
@@ -237,18 +237,20 @@ def user_identity_signed_bytes(
     user_public_key: bytes,
     user_sig_suite: str,
 ) -> bytes:
-    """Canonical bytes the USER self-signature covers (NUL-separated, mirroring
-    user_assertion_signed_bytes). Binds user_id, instance, username, user pubkey,
-    suite."""
-    return b"\x00".join(
-        [
-            b"sh/user-identity/v1",
-            user_id.encode("utf-8"),
-            instance_id.encode("utf-8"),
-            username.encode("utf-8"),
-            user_public_key,
-            user_sig_suite.encode("utf-8"),
-        ]
+    """Canonical bytes the USER self-signature covers. Length-prefixed (4-byte
+    big-endian length per field via ``_lv``), mirroring
+    ``user_assertion_signed_bytes`` — so a NUL byte in any field (usernames are
+    not charset-restricted) cannot shift field boundaries and collide two
+    different field tuples onto identical signed bytes. Binds user_id, instance,
+    username, user pubkey, suite, under the ``sh/user-identity/v1`` domain
+    prefix."""
+    return (
+        _lv(b"sh/user-identity/v1")
+        + _lv(user_id.encode("utf-8"))
+        + _lv(instance_id.encode("utf-8"))
+        + _lv(username.encode("utf-8"))
+        + _lv(user_public_key)
+        + _lv(user_sig_suite.encode("utf-8"))
     )
 
 

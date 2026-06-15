@@ -412,3 +412,34 @@ def test_user_self_sign_roundtrip():
     sig = sign_user_self(kp.private_key, body)
     assert verify_user_self(kp.public_key, body, sig) is True
     assert verify_user_self(kp.public_key, body + b"x", sig) is False
+
+
+def test_user_identity_signed_bytes_no_field_boundary_collision():
+    """Length-prefixing prevents a NUL in one field from shifting boundaries so
+    two different field tuples canonicalize to identical signed bytes."""
+    kp = generate_identity_keypair()
+    pk = kp.public_key
+    a = user_identity_signed_bytes(
+        user_id="u1\x00i1",
+        instance_id="X",
+        username="alice",
+        user_public_key=pk,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    b = user_identity_signed_bytes(
+        user_id="u1",
+        instance_id="i1\x00X",
+        username="alice",
+        user_public_key=pk,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    assert a != b
+
+
+def test_validate_user_sig_suite_fails_closed_on_non_string():
+    """A non-string (unhashable) suite must raise UnsupportedUserSigSuite, not a
+    bare TypeError from `suite not in frozenset`."""
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite(["ed25519"])  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite({"s": 1})  # type: ignore[arg-type]
