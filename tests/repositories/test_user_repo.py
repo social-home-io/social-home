@@ -45,10 +45,83 @@ async def test_save_and_get_by_username(env):
     assert got.user_id == u.user_id
 
 
+async def test_set_user_identity_key_persists_both_halves(env):
+    """set_user_identity_key writes the public + KEK-wrapped private columns."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex="ab" * 32,
+        private_key_wrapped="wrapped-seed",
+    )
+    row = await env.db.fetchone(
+        "SELECT user_identity_public_key, user_identity_private_key "
+        "FROM users WHERE username=?",
+        ("alice",),
+    )
+    assert row["user_identity_public_key"] == "ab" * 32
+    assert row["user_identity_private_key"] == "wrapped-seed"
+
+
 async def test_get_missing_user_returns_none(env):
     """Getting a non-existent username returns None."""
     got = await env.user_repo.get("nobody")
     assert got is None
+
+
+async def test_get_user_identity_keypair_roundtrips_decrypted_seed(env):
+    """get_user_identity_keypair returns the raw (public, private-seed) bytes,
+    decrypting the KEK-wrapped private column via the attached key_manager."""
+    import os
+
+    from socialhome.crypto import generate_identity_keypair
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    km = KeyManager(os.urandom(32))
+    env.user_repo.attach_key_manager(km)
+    await env.user_svc.provision(username="alice", display_name="Alice")
+
+    kp = generate_identity_keypair()
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex=kp.public_key.hex(),
+        private_key_wrapped=km.encrypt(kp.private_key),
+    )
+
+    got = await env.user_repo.get_user_identity_keypair("alice")
+    assert got is not None
+    public_key, private_seed = got
+    assert public_key == kp.public_key
+    assert private_seed == kp.private_key
+
+
+async def test_get_user_identity_keypair_none_when_unminted(env):
+    """A user with no identity columns (NULL) returns None — never a partial
+    or crashing result."""
+    import os
+
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    env.user_repo.attach_key_manager(KeyManager(os.urandom(32)))
+    # Provision WITHOUT a key_manager on the service so no key is minted.
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, state) VALUES(?,?,?,?)",
+        ("bob", "u-bob", "Bob", "active"),
+    )
+    assert await env.user_repo.get_user_identity_keypair("bob") is None
+    assert await env.user_repo.get_user_identity_keypair("nobody") is None
+
+
+async def test_get_user_identity_keypair_requires_key_manager(env):
+    """Without an attached KEK the getter raises — never returns a wrapped
+    blob masquerading as a seed."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex="ab" * 32,
+        private_key_wrapped="wrapped",
+    )
+    with pytest.raises(RuntimeError):
+        await env.user_repo.get_user_identity_keypair("alice")
 
 
 async def test_list_active_users(env):
@@ -188,3 +261,49 @@ async def test_get_remote_by_member_roundtrip(env):
     # the index is on the composite, not either half alone.
     assert await env.user_repo.get_remote_by_member("peer-x", "brother") is None
     assert await env.user_repo.get_remote_by_member("peer-b", "sister") is None
+
+
+async def test_set_remote_user_identity_key_persists_verified_key(env):
+    """``set_remote_user_identity_key`` stores the verified per-user identity
+    public key on the ``remote_users`` row without disturbing the rest of it."""
+    from socialhome.domain.user import RemoteUser
+
+    await env.db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "peer-c",
+            "Peer C",
+            "11" * 32,
+            "k1",
+            "k2",
+            "https://peer-c.example/federation/inbox/x",
+            "local-inbox",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await env.user_repo.upsert_remote(
+        RemoteUser(
+            user_id="uid-remote-c",
+            instance_id="peer-c",
+            remote_username="carol",
+            display_name="Carol",
+        ),
+    )
+
+    await env.user_repo.set_remote_user_identity_key(
+        "uid-remote-c", public_key_hex="cd" * 32
+    )
+
+    row = await env.db.fetchone(
+        "SELECT user_identity_public_key, display_name FROM remote_users "
+        "WHERE user_id=?",
+        ("uid-remote-c",),
+    )
+    assert row["user_identity_public_key"] == "cd" * 32
+    # The rest of the row is untouched.
+    assert row["display_name"] == "Carol"

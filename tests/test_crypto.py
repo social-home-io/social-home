@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from socialhome.crypto import (
     REPLAY_CACHE_WINDOW,
+    SUPPORTED_USER_SIG_SUITES,
+    USER_SIG_SUITE_ED25519,
     ReplayCache,
+    UnsupportedUserSigSuite,
     b64url_decode,
     b64url_encode,
+    build_user_identity_assertion,
     derive_instance_id,
     derive_user_id,
     generate_identity_keypair,
@@ -21,8 +26,12 @@ from socialhome.crypto import (
     sha256_hex,
     sign_ed25519,
     sign_user_assertion,
+    sign_user_self,
+    user_identity_signed_bytes,
+    validate_user_sig_suite,
     verify_ed25519,
     verify_user_identity_assertion,
+    verify_user_self,
     x25519_exchange,
 )
 from socialhome.domain.user import UserIdentityAssertion
@@ -376,3 +385,201 @@ def test_replay_cache_prune_handles_naive_persisted_entries():
     assert rc.seen("fresh-msg") is False
     # The persisted entry is still considered seen (well within window).
     assert rc.seen("persisted-msg") is True
+
+
+# ─── User-identity self-signature (independent user identity Phase 1) ───────
+
+
+def test_user_sig_suite_contract():
+    """USER_SIG_SUITE tag contract: ed25519 only, reject unknown suites."""
+    assert USER_SIG_SUITE_ED25519 == "ed25519"
+    assert USER_SIG_SUITE_ED25519 in SUPPORTED_USER_SIG_SUITES
+    assert "ed25519+mldsa65" not in SUPPORTED_USER_SIG_SUITES
+    assert issubclass(UnsupportedUserSigSuite, ValueError)
+    assert validate_user_sig_suite(USER_SIG_SUITE_ED25519) is None
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite("bogus")
+
+
+def test_user_self_sign_roundtrip():
+    """USER self-signature round-trips and rejects a tampered body."""
+    kp = generate_identity_keypair()
+    body = user_identity_signed_bytes(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        user_public_key=kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    sig = sign_user_self(kp.private_key, body)
+    assert verify_user_self(kp.public_key, body, sig) is True
+    assert verify_user_self(kp.public_key, body + b"x", sig) is False
+
+
+def test_user_identity_signed_bytes_no_field_boundary_collision():
+    """Length-prefixing prevents a NUL in one field from shifting boundaries so
+    two different field tuples canonicalize to identical signed bytes."""
+    kp = generate_identity_keypair()
+    pk = kp.public_key
+    a = user_identity_signed_bytes(
+        user_id="u1\x00i1",
+        instance_id="X",
+        username="alice",
+        user_public_key=pk,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    b = user_identity_signed_bytes(
+        user_id="u1",
+        instance_id="i1\x00X",
+        username="alice",
+        user_public_key=pk,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    assert a != b
+
+
+def test_validate_user_sig_suite_fails_closed_on_non_string():
+    """A non-string (unhashable) suite must raise UnsupportedUserSigSuite, not a
+    bare TypeError from `suite not in frozenset`."""
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite(["ed25519"])  # type: ignore[arg-type]
+    with pytest.raises(UnsupportedUserSigSuite):
+        validate_user_sig_suite({"s": 1})  # type: ignore[arg-type]
+
+
+# ─── User identity binding (dual signature) — Phase 1 ──────────────────────
+
+
+def _make_dual_assertion(*, username: str = "pascal", display_name: str = "Pascal"):
+    """Build an assertion carrying both the instance sig and the user self-sig.
+
+    Returns ``(assertion, instance_pubkey, user_keypair)``.
+    """
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, username)
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username=username,
+        display_name=display_name,
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+    )
+    return a, instance_kp.public_key, user_kp
+
+
+def test_dual_assertion_carries_user_binding_and_verifies():
+    """An assertion built with a user key carries the binding fields and both
+    signatures verify."""
+    a, instance_pubkey, user_kp = _make_dual_assertion()
+    assert a.user_identity_public_key == user_kp.public_key.hex()
+    assert a.user_sig_suite == USER_SIG_SUITE_ED25519
+    assert a.user_signature is not None
+    assert a.user_pq_public_key is None
+    # Does not raise -> both instance sig and user self-sig validate.
+    verify_user_identity_assertion(a, instance_pubkey)
+
+
+def test_dual_assertion_tampered_user_pubkey_rejected():
+    """Swapping in another keypair's pubkey breaks the user self-signature."""
+    a, instance_pubkey, _user_kp = _make_dual_assertion()
+    other = generate_identity_keypair()
+    bad = dataclasses.replace(a, user_identity_public_key=other.public_key.hex())
+    with pytest.raises(ValueError, match="user"):
+        verify_user_identity_assertion(bad, instance_pubkey)
+
+
+def test_dual_assertion_instance_sig_still_enforced():
+    """The existing instance-signature path still rejects a wrong instance key."""
+    a, _instance_pubkey, _user_kp = _make_dual_assertion()
+    wrong = generate_identity_keypair()
+    with pytest.raises(ValueError):
+        verify_user_identity_assertion(a, wrong.public_key)
+
+
+def test_dual_assertion_unknown_user_sig_suite_raises():
+    """An unknown user_sig_suite on a present binding propagates
+    UnsupportedUserSigSuite (no default fallback)."""
+    a, instance_pubkey, _user_kp = _make_dual_assertion()
+    bad = dataclasses.replace(a, user_sig_suite="bogus")
+    with pytest.raises(UnsupportedUserSigSuite):
+        verify_user_identity_assertion(bad, instance_pubkey)
+
+
+def test_legacy_assertion_without_user_binding_unchanged():
+    """An assertion built with no user key leaves all new fields None and verifies
+    exactly as the legacy instance-sig-only path."""
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    uid = derive_user_id(kp.public_key, "pascal")
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="pascal",
+        display_name="Pascal",
+        issued_at=issued,
+    )
+    assert a.user_identity_public_key is None
+    assert a.user_pq_public_key is None
+    assert a.user_sig_suite is None
+    assert a.user_signature is None
+    verify_user_identity_assertion(a, kp.public_key)
+
+
+def test_dual_assertion_key_transplant_rejected():
+    """A transplant attack must fail: an attacker who holds a victim's
+    legitimately instance-signed, binding-bearing assertion swaps in their own
+    user_identity_public_key and forges a VALID self-sig with their own seed,
+    leaving the instance signature untouched. Because the instance signature
+    now commits to the user pubkey, the swap breaks the instance sig and the
+    whole assertion is rejected — binding the attacker key to the victim's
+    user_id is impossible without the household's instance seed.
+    """
+    a, instance_pubkey, _victim_kp = _make_dual_assertion()
+    attacker = generate_identity_keypair()
+    # Attacker forges a PROPER self-sig for their own key over the recomputed
+    # user-identity signed bytes (proves possession of the attacker key).
+    body = user_identity_signed_bytes(
+        user_id=a.user_id,
+        instance_id=a.instance_id,
+        username=a.username,
+        user_public_key=attacker.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    forged_self_sig = b64url_encode(sign_user_self(attacker.private_key, body))
+    tampered = dataclasses.replace(
+        a,
+        user_identity_public_key=attacker.public_key.hex(),
+        user_signature=forged_self_sig,
+        # instance `signature` deliberately left untouched.
+    )
+    # Self-sig is now internally valid, but the instance sig no longer covers
+    # the swapped pubkey -> rejected.
+    with pytest.raises(ValueError, match="signature"):
+        verify_user_identity_assertion(tampered, instance_pubkey)
+
+
+def test_dual_assertion_malformed_pubkey_hex_raises_domain_error():
+    """A malformed (non-hex) user_identity_public_key raises a clear domain
+    ValueError, not a raw bytes.fromhex 'non-hexadecimal number' error."""
+    a, instance_pubkey, _user_kp = _make_dual_assertion()
+    bad = dataclasses.replace(a, user_identity_public_key="zz not hex zz")
+    with pytest.raises(ValueError, match="malformed user identity binding"):
+        verify_user_identity_assertion(bad, instance_pubkey)
+
+
+def test_dual_assertion_missing_suite_defaults_to_ed25519():
+    """A first-revision payload that carries the pubkey but omits user_sig_suite
+    defaults to ed25519 (the documented tripwire) and verifies."""
+    a, instance_pubkey, _user_kp = _make_dual_assertion()
+    # The signed body uses the suite passed at build time (ed25519); a
+    # first-revision sender simply omits the field on the wire.
+    first_rev = dataclasses.replace(a, user_sig_suite=None)
+    verify_user_identity_assertion(first_rev, instance_pubkey)

@@ -204,7 +204,22 @@ class UserIdentityAssertion:
 
     The ``signature`` is a base64url-encoded Ed25519 signature over the
     canonical byte encoding in
-    :func:`socialhome.crypto.user_assertion_signed_bytes`.
+    :func:`socialhome.crypto.instance_assertion_signed_bytes` — the **INSTANCE**
+    signature, proving "this user is hosted at ``instance_id``". For a legacy
+    assertion those bytes are exactly
+    :func:`socialhome.crypto.user_assertion_signed_bytes`; for a binding-bearing
+    assertion they are extended to also commit to the user pubkey + suite, so
+    the household vouches for the *specific* user key (closing the key-transplant
+    flaw: a swapped user key can't reuse the instance signature).
+
+    The optional ``user_*`` binding fields carry a second, **USER** self-
+    signature proving "the user holds their own identity key" (independent of
+    the hosting instance). When present, both signatures are checked by
+    :func:`socialhome.crypto.verify_user_identity_assertion` — the instance sig
+    over the extended bytes (binding) and the user self-sig (possession). They
+    are nullable / defaulted ``None`` so a legacy or first-revision payload that
+    omits them still parses (backward compat); a present
+    ``user_identity_public_key`` is what gates the second check.
 
     ``picture_url`` is carried for display convenience but is **not** covered
     by the signature — it may be changed at any time by the home instance.
@@ -215,13 +230,25 @@ class UserIdentityAssertion:
     username: str
     display_name: str
     issued_at: str  # ISO-8601 UTC
-    signature: str  # base64url Ed25519 signature
+    signature: str  # base64url Ed25519 INSTANCE signature
 
     # Informational cache-busting hash; bytes travel via USER_UPDATED
     # federation events, not the identity assertion itself.
     picture_hash: str | None = None
     public_key: str | None = None  # base64url P-256 ECDH SPKI (§12.5)
     public_key_version: int = 0
+
+    # Per-user identity binding (independent user identity, Phase 1). The
+    # USER self-signature in ``user_signature`` (base64url) is verified
+    # against ``user_identity_public_key`` (hex Ed25519) over the canonical
+    # bytes in :func:`socialhome.crypto.user_identity_signed_bytes`.
+    # ``user_pq_public_key`` is reserved for the Phase-2 PQ hybrid and is
+    # ``None`` in Phase 1. All four default ``None`` so older / first-
+    # revision payloads omitting the binding still parse.
+    user_identity_public_key: str | None = None  # hex Ed25519 user pubkey
+    user_pq_public_key: str | None = None  # hex; reserved for PQ (None in P1)
+    user_sig_suite: str | None = None  # e.g. "ed25519"
+    user_signature: str | None = None  # base64url USER self-signature
 
 
 @dataclass(slots=True, frozen=True)

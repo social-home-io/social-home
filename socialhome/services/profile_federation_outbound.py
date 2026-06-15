@@ -26,6 +26,7 @@ from ..domain.events import UserProfileUpdated
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
 from .peer_outbound import ConfirmedPeerBroadcaster, SingleTargetSender
+from .user_identity_binding import user_identity_binding_fields
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     from ..repositories.peer_user_visibility_repo import (
         AbstractPeerUserVisibilityRepo,
     )
+    from ..repositories.user_repo import AbstractUserRepo
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +47,15 @@ class ProfileFederationOutbound(
 ):
     """Publish :class:`UserProfileUpdated` events as ``USER_UPDATED``."""
 
+    # Narrow the mixin's ``FederationService | None`` slot — this service
+    # always wires a live federation service in ``__init__``.
+    _federation: "FederationService"
+
     __slots__ = (
         "_bus",
         "_federation",
         "_federation_repo",
+        "_user_repo",
     )
 
     def __init__(
@@ -58,6 +65,7 @@ class ProfileFederationOutbound(
         federation_service: "FederationService",
         federation_repo: "AbstractFederationRepo",
         visibility_repo: "AbstractPeerUserVisibilityRepo | None" = None,
+        user_repo: "AbstractUserRepo | None" = None,
     ) -> None:
         self._bus = bus
         self._federation = federation_service
@@ -67,6 +75,10 @@ class ProfileFederationOutbound(
         # unset, every user fans to every confirmed peer just like
         # before this PR.
         self._visibility_repo = visibility_repo
+        # Optional — supplies the per-user Ed25519 identity keypair for the
+        # proto-v_25 identity binding. When unset the binding is simply
+        # omitted (legacy shape) even for a v_25 peer.
+        self._user_repo = user_repo
 
     def wire(self) -> None:
         self._bus.subscribe(UserProfileUpdated, self._on_updated)
@@ -92,8 +104,20 @@ class ProfileFederationOutbound(
             hidden = await self.hidden_for_peer(instance_id)
             if event.user_id in hidden:
                 continue
+            # Per-user identity binding (proto v_25). Computed per-peer
+            # because the v_25 gate is per-peer; a v_24 peer keeps the
+            # legacy payload untouched.
+            binding = await user_identity_binding_fields(
+                federation_service=self._federation,
+                user_repo=self._user_repo,
+                peer_instance_id=instance_id,
+                user_id=event.user_id,
+                username=event.username,
+                display_name=event.display_name,
+                picture_hash=event.picture_hash,
+            )
             await self.send_to_instance(
                 instance_id,
                 FederationEventType.USER_UPDATED,
-                payload,
+                {**payload, **binding} if binding else payload,
             )

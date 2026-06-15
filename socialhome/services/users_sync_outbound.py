@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 from ..domain.events import PairingConfirmed
 from ..domain.federation import FederationEventType
 from ..infrastructure.event_bus import EventBus
+from .user_identity_binding import user_identity_binding_fields
 from .visibility import VisibilityMixin
 
 if TYPE_CHECKING:
@@ -100,6 +101,19 @@ class UsersSyncOutbound(VisibilityMixin):
                 "bio": u.bio,
                 "picture_hash": u.picture_hash,
             }
+            # Per-user identity binding (proto v_25) — present only for a
+            # peer that can validate it; older peers keep the legacy shape.
+            entry.update(
+                await user_identity_binding_fields(
+                    federation_service=self._federation,
+                    user_repo=self._user_repo,
+                    peer_instance_id=peer_id,
+                    user_id=u.user_id,
+                    username=u.username,
+                    display_name=u.display_name,
+                    picture_hash=u.picture_hash,
+                ),
+            )
             # Attach the WebP bytes so the peer can render the avatar
             # immediately. Skipped silently when the picture lookup
             # fails or no bytes exist — the receiver will still get

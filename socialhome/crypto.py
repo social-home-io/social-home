@@ -22,7 +22,6 @@ import os
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -35,10 +34,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 )
 from cryptography.hazmat.primitives import serialization
 
+from .domain.user import UserIdentityAssertion
 from .utils.datetime import parse_iso8601_strict
-
-if TYPE_CHECKING:
-    from .domain.user import UserIdentityAssertion
 
 
 # ─── Base helpers ──────────────────────────────────────────────────────────
@@ -203,6 +200,65 @@ def x25519_exchange(private_key: bytes, peer_public_key: bytes) -> bytes:
     return sk.exchange(pk)
 
 
+# ─── User-identity signature suite tag (independent user identity) ─────────
+
+
+USER_SIG_SUITE_ED25519: str = "ed25519"
+SUPPORTED_USER_SIG_SUITES: frozenset[str] = frozenset({USER_SIG_SUITE_ED25519})
+
+
+class UnsupportedUserSigSuite(ValueError):
+    """Raised when a user-identity assertion advertises a `user_sig_suite` this
+    build doesn't know. Receivers MUST reject rather than fall back to a default
+    (downgrade protection once the Phase-2 hybrid `ed25519+mldsa65` lands). PQ
+    migration grows the frozenset + ships the parallel signature; wire shape
+    unchanged."""
+
+
+def validate_user_sig_suite(suite: str) -> None:
+    if not isinstance(suite, str) or suite not in SUPPORTED_USER_SIG_SUITES:
+        raise UnsupportedUserSigSuite(
+            f"user_sig_suite={suite!r} not recognised; expected one of "
+            f"{SUPPORTED_USER_SIG_SUITES}",
+        )
+
+
+# ─── User self-signature (independent user identity Phase 1) ───────────────
+
+
+def user_identity_signed_bytes(
+    *,
+    user_id: str,
+    instance_id: str,
+    username: str,
+    user_public_key: bytes,
+    user_sig_suite: str,
+) -> bytes:
+    """Canonical bytes the USER self-signature covers. Length-prefixed (4-byte
+    big-endian length per field via ``_lv``), mirroring
+    ``user_assertion_signed_bytes`` — so a NUL byte in any field (usernames are
+    not charset-restricted) cannot shift field boundaries and collide two
+    different field tuples onto identical signed bytes. Binds user_id, instance,
+    username, user pubkey, suite, under the ``sh/user-identity/v1`` domain
+    prefix."""
+    return (
+        _lv(b"sh/user-identity/v1")
+        + _lv(user_id.encode("utf-8"))
+        + _lv(instance_id.encode("utf-8"))
+        + _lv(username.encode("utf-8"))
+        + _lv(user_public_key)
+        + _lv(user_sig_suite.encode("utf-8"))
+    )
+
+
+def sign_user_self(user_seed: bytes, message: bytes) -> bytes:
+    return sign_ed25519(user_seed, message)
+
+
+def verify_user_self(user_public_key: bytes, message: bytes, signature: bytes) -> bool:
+    return verify_ed25519(user_public_key, message, signature)
+
+
 # ─── UserIdentityAssertion encoding (§4.1.4) ──────────────────────────────
 
 
@@ -233,6 +289,48 @@ def user_assertion_signed_bytes(
     )
 
 
+def instance_assertion_signed_bytes(
+    *,
+    user_id: str,
+    instance_id: str,
+    username: str,
+    display_name: str,
+    issued_at: str,
+    user_identity_public_key: bytes | None,
+    user_sig_suite: str | None,
+) -> bytes:
+    """Bytes the INSTANCE signature covers.
+
+    For a legacy assertion (no user binding) this is **exactly** the legacy
+    :func:`user_assertion_signed_bytes` — byte-for-byte backward compatible
+    with existing v24 assertions.
+
+    For a binding-bearing assertion (``user_identity_public_key`` present) the
+    legacy bytes are **extended** with the user pubkey + suite under a
+    ``user-binding`` domain separator, so the household vouches for the
+    *specific* user key. This closes the transplant flaw: an attacker who
+    swaps in their own user pubkey can no longer re-use the victim's instance
+    signature, because that signature now commits to the user key. The
+    ``_lv``-prefixed domain tag can't collide with the legacy tail (whose
+    final field is the ``issued_at`` value), so the extension is unambiguous.
+    """
+    legacy = user_assertion_signed_bytes(
+        user_id,
+        instance_id,
+        username,
+        display_name,
+        issued_at,
+    )
+    if user_identity_public_key is None:
+        return legacy
+    return (
+        legacy
+        + _lv(b"user-binding")
+        + _lv(user_identity_public_key)
+        + _lv((user_sig_suite or USER_SIG_SUITE_ED25519).encode("utf-8"))
+    )
+
+
 def sign_user_assertion(
     seed: bytes,
     *,
@@ -241,16 +339,100 @@ def sign_user_assertion(
     username: str,
     display_name: str,
     issued_at: str,
+    user_identity_public_key: bytes | None = None,
+    user_sig_suite: str | None = None,
 ) -> str:
-    """Produce the base64url Ed25519 signature for a user identity assertion."""
-    payload = user_assertion_signed_bytes(
+    """Produce the base64url Ed25519 INSTANCE signature for a user identity
+    assertion.
+
+    When ``user_identity_public_key`` is supplied the signed bytes are extended
+    to commit to the user binding (see :func:`instance_assertion_signed_bytes`);
+    otherwise the legacy bytes are signed verbatim.
+    """
+    payload = instance_assertion_signed_bytes(
         user_id=user_id,
         instance_id=instance_id,
         username=username,
         display_name=display_name,
         issued_at=issued_at,
+        user_identity_public_key=user_identity_public_key,
+        user_sig_suite=user_sig_suite,
     )
     return b64url_encode(sign_ed25519(seed, payload))
+
+
+def build_user_identity_assertion(
+    *,
+    instance_seed: bytes,
+    user_id: str,
+    instance_id: str,
+    username: str,
+    display_name: str,
+    issued_at: str,
+    picture_hash: str | None = None,
+    public_key: str | None = None,
+    public_key_version: int = 0,
+    user_seed: bytes | None = None,
+    user_public_key: bytes | None = None,
+    user_sig_suite: str = USER_SIG_SUITE_ED25519,
+) -> UserIdentityAssertion:
+    """Build a signed :class:`UserIdentityAssertion`.
+
+    The INSTANCE signature (``signature``) is always produced from
+    ``instance_seed`` exactly as the legacy path did. When **both**
+    ``user_seed`` and ``user_public_key`` are supplied, a second USER
+    self-signature is attached, binding the user's own identity key into the
+    assertion (proving "the user holds their identity key", independent of the
+    hosting instance). When either is absent the legacy assertion is produced
+    verbatim — all ``user_*`` binding fields stay ``None``.
+    """
+    user_identity_public_key: str | None = None
+    suite: str | None = None
+    user_signature: str | None = None
+    binding_pubkey: bytes | None = None
+    if user_seed is not None and user_public_key is not None:
+        validate_user_sig_suite(user_sig_suite)
+        user_identity_public_key = user_public_key.hex()
+        suite = user_sig_suite
+        binding_pubkey = user_public_key
+        body = user_identity_signed_bytes(
+            user_id=user_id,
+            instance_id=instance_id,
+            username=username,
+            user_public_key=user_public_key,
+            user_sig_suite=user_sig_suite,
+        )
+        user_signature = b64url_encode(sign_user_self(user_seed, body))
+
+    # The INSTANCE signature commits to the user binding when one is present
+    # (binding_pubkey != None) so a transplanted user key can't re-use it; a
+    # legacy assertion (binding_pubkey == None) signs the legacy bytes verbatim.
+    signature = sign_user_assertion(
+        instance_seed,
+        user_id=user_id,
+        instance_id=instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=issued_at,
+        user_identity_public_key=binding_pubkey,
+        user_sig_suite=suite,
+    )
+
+    return UserIdentityAssertion(
+        user_id=user_id,
+        instance_id=instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=issued_at,
+        signature=signature,
+        picture_hash=picture_hash,
+        public_key=public_key,
+        public_key_version=public_key_version,
+        user_identity_public_key=user_identity_public_key,
+        user_pq_public_key=None,  # reserved for the Phase-2 PQ hybrid
+        user_sig_suite=suite,
+        user_signature=user_signature,
+    )
 
 
 def verify_user_identity_assertion(
@@ -266,8 +448,17 @@ def verify_user_identity_assertion(
 
     * instance_id does not match the sender's public key;
     * user_id does not match (public key + username);
-    * the Ed25519 signature is invalid;
+    * the Ed25519 INSTANCE signature is invalid;
+    * a present user-identity binding fails its USER self-signature;
     * the assertion is older than ``max_age`` or is dated in the future.
+
+    When ``assertion.user_identity_public_key`` is present, the USER self-
+    signature is additionally verified against that key — proving the user
+    holds their own identity key, independent of the hosting instance. A
+    present binding with an unknown ``user_sig_suite`` raises
+    :class:`UnsupportedUserSigSuite` (no default fallback). When the binding
+    is absent the function behaves exactly as the legacy instance-sig-only
+    path.
     """
     expected_instance_id = derive_instance_id(sender_instance_public_key)
     if assertion.instance_id != expected_instance_id:
@@ -277,12 +468,35 @@ def verify_user_identity_assertion(
     if assertion.user_id != expected_user_id:
         raise ValueError("user_id does not match instance public key + username")
 
-    payload = user_assertion_signed_bytes(
+    # Parse + validate the per-user identity binding up front (when present) so
+    # the INSTANCE signature can be verified over bytes that COMMIT to the user
+    # pubkey. Absence of a pubkey == legacy payload: instance sig covers the
+    # legacy bytes exactly, no user self-sig.
+    user_pubkey: bytes | None = None
+    user_self_sig: str | None = None
+    suite: str | None = None
+    if assertion.user_identity_public_key is not None:
+        # A first-revision payload may omit the suite; default to ed25519 (the
+        # documented tripwire). An explicit unknown suite must NOT fall back —
+        # validate_user_sig_suite raises UnsupportedUserSigSuite.
+        suite = assertion.user_sig_suite or USER_SIG_SUITE_ED25519
+        validate_user_sig_suite(suite)
+        if assertion.user_signature is None:
+            raise ValueError("user identity binding missing user_signature")
+        user_self_sig = assertion.user_signature
+        try:
+            user_pubkey = bytes.fromhex(assertion.user_identity_public_key)
+        except ValueError as exc:
+            raise ValueError("malformed user identity binding") from exc
+
+    payload = instance_assertion_signed_bytes(
         user_id=assertion.user_id,
         instance_id=assertion.instance_id,
         username=assertion.username,
         display_name=assertion.display_name,
         issued_at=assertion.issued_at,
+        user_identity_public_key=user_pubkey,
+        user_sig_suite=suite,
     )
     if not verify_ed25519(
         sender_instance_public_key,
@@ -290,6 +504,23 @@ def verify_user_identity_assertion(
         b64url_decode(assertion.signature),
     ):
         raise ValueError("Invalid user identity assertion signature")
+
+    # The instance sig (above) now vouches for the specific user key when a
+    # binding is present; the user self-sig additionally proves possession.
+    if user_pubkey is not None and user_self_sig is not None:
+        body = user_identity_signed_bytes(
+            user_id=assertion.user_id,
+            instance_id=assertion.instance_id,
+            username=assertion.username,
+            user_public_key=user_pubkey,
+            user_sig_suite=suite or USER_SIG_SUITE_ED25519,
+        )
+        if not verify_user_self(
+            user_pubkey,
+            body,
+            b64url_decode(user_self_sig),
+        ):
+            raise ValueError("Invalid user identity binding self-signature")
 
     issued = parse_iso8601_strict(assertion.issued_at)
     current = now if now is not None else datetime.now(timezone.utc)

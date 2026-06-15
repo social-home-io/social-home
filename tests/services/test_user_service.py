@@ -9,6 +9,7 @@ import pytest
 from socialhome.crypto import generate_identity_keypair, derive_instance_id
 from socialhome.db.database import AsyncDatabase
 from socialhome.infrastructure.event_bus import EventBus
+from socialhome.infrastructure.key_manager import KeyManager
 from socialhome.repositories.user_repo import SqliteUserRepo
 from socialhome.services.user_service import UserService
 
@@ -27,7 +28,13 @@ async def stack(tmp_dir):
     )
     bus = EventBus()
     user_repo = SqliteUserRepo(db)
-    user_svc = UserService(user_repo, bus, own_instance_public_key=kp.public_key)
+    key_manager = KeyManager.from_data_dir(tmp_dir)
+    user_svc = UserService(
+        user_repo,
+        bus,
+        own_instance_public_key=kp.public_key,
+        key_manager=key_manager,
+    )
 
     class Stack:
         pass
@@ -37,6 +44,7 @@ async def stack(tmp_dir):
     s.bus = bus
     s.user_repo = user_repo
     s.user_svc = user_svc
+    s.key_manager = key_manager
 
     async def provision_user(username, **kw):
         return await user_svc.provision(username=username, display_name=username, **kw)
@@ -52,6 +60,23 @@ async def test_provision_and_query(stack):
     assert u.is_admin and u.user_id
     got = await stack.user_svc.get("pascal")
     assert got.email == "p@x.com"
+
+
+async def test_provision_mints_user_identity_key(stack):
+    """Provisioning a user mints a KEK-wrapped Ed25519 identity key immediately."""
+    await stack.provision_user("pascal")
+    row = await stack.db.fetchone(
+        "SELECT user_identity_public_key, user_identity_private_key "
+        "FROM users WHERE username=?",
+        ("pascal",),
+    )
+    assert row["user_identity_public_key"] is not None
+    assert row["user_identity_private_key"] is not None
+    # Public half is a 32-byte Ed25519 key, hex-encoded.
+    assert len(bytes.fromhex(row["user_identity_public_key"])) == 32
+    # Private half is KEK-wrapped and decrypts to the 32-byte seed.
+    seed = stack.key_manager.decrypt(row["user_identity_private_key"])
+    assert len(seed) == 32
 
 
 async def test_idempotent_provision(stack):

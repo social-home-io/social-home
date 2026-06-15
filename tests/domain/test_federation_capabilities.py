@@ -6,7 +6,29 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 24
+    assert fc.OURS == 25
+
+
+def test_ours_is_25_and_user_identity_capability():
+    from socialhome.domain import federation_capabilities as fc
+
+    assert fc.OURS == 25
+    assert fc.FederationCapability.MIN_FOR_USER_IDENTITY_KEY == 25
+
+
+def test_user_identity_key_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_USER_IDENTITY_KEY == 25
+    assert fc.FederationCapability.MIN_FOR_USER_IDENTITY_KEY <= fc.OURS
+
+
+def test_user_identity_key_feature_label():
+    labels = dict(fc.CAPABILITY_FEATURES).values()
+    assert "Per-user identity binding" in labels
+    assert "Per-user identity binding" in fc.features_missing_below(24)
+    assert "Per-user identity binding" not in fc.features_missing_below(25)
+    # Per-user surface, not space-scoped — its lag affects only the two
+    # parties, so it is NOT in the per-space compatibility banner.
+    assert "Per-user identity binding" not in fc.space_features_missing_below(24)
 
 
 def test_admin_authoritative_ops_capability_threshold():

@@ -104,6 +104,7 @@ If `SpaceContentEncryption` isn't configured, the outbound path raises
 - **Handshake**
   - [Pairing](./pairing.md) — one-time QR-based identity + session key exchange.
   - [Capabilities](./capabilities.md) — monotonic `proto_version` exchange so senders can gate optional fields on what the receiving peer's build actually understands.
+  - [Independent user identity](./user-identity.md) — per-user Ed25519 key + dual-signed binding carried on `USERS_SYNC` / `USER_UPDATED` (Phase 1, capability v_25); behaviour-neutral, legacy `user_id` stays canonical.
   - [Home location](./home-location.md) — household GPS coordinates broadcast to peers for the Connections Map view (`LOCAL_HOME_LOCATION_CHANGED`, capability v5).
 - **Spaces**
   - [Spaces](./spaces.md) — create/dissolve, membership events, per-space key exchange.

@@ -7,6 +7,7 @@ import sqlite3
 
 import pytest
 
+from socialhome.db.database import AsyncDatabase
 from socialhome.db.migrations import (
     MIGRATIONS_DIR,
     MigrationError,
@@ -166,3 +167,40 @@ def test_0036_backfills_roster_sequence_from_config_sequence(tmp_path):
     assert row["config_sequence"] == 4
     assert row["roster_sequence"] == 4  # backfilled to match
     conn.close()
+
+
+@pytest.mark.asyncio
+async def test_0040_user_identity_columns(tmp_path):
+    """Migration 0040 adds per-user identity key columns (Phase 1 of
+    independent user identity). Mirrors instance_identity key family.
+    NULL-defaulted, no backfill."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+
+    # Check users table has the new columns
+    users_cols = {r["name"] for r in await db.fetchall("PRAGMA table_info(users)")}
+    required_users_cols = {
+        "user_identity_public_key",
+        "user_identity_private_key",
+        "user_pq_algorithm",
+        "user_pq_public_key",
+        "user_pq_private_key",
+    }
+    assert required_users_cols <= users_cols, (
+        f"Missing columns in users table: {required_users_cols - users_cols}"
+    )
+
+    # Check remote_users table has the new columns
+    remote_users_cols = {
+        r["name"] for r in await db.fetchall("PRAGMA table_info(remote_users)")
+    }
+    required_remote_users_cols = {
+        "user_identity_public_key",
+        "user_pq_public_key",
+    }
+    assert required_remote_users_cols <= remote_users_cols, (
+        f"Missing columns in remote_users table: "
+        f"{required_remote_users_cols - remote_users_cols}"
+    )
+
+    await db.shutdown()

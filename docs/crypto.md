@@ -256,6 +256,36 @@ carries a ``*_suite`` identifier (signatures, mesh KEM, content-key
 delivery, sealed-sender AEAD). A future ChaCha20-Poly1305 or
 PQ-protected variant is a wire-additive change.
 
+**Per-user identity binding** (`crypto.py`, independent user identity
+Phase 1) — each household member has an Ed25519 **user** key separate
+from the household's instance key. When a household publishes one of its
+users (`USERS_SYNC` / `USER_UPDATED`, capability v_25) the per-user entry
+may carry a *dual-signed* binding, verified by
+`verify_user_identity_assertion`:
+
+- The **USER self-signature** (`user_signature`, base64url) covers
+  `user_identity_signed_bytes` — a length-prefixed (`_lv`) encoding under
+  the `sh/user-identity/v1` domain tag binding `user_id`, `instance_id`,
+  `username`, the user public key, and the suite. It proves the user
+  holds their own key, independent of the hosting instance.
+- The **INSTANCE signature** (`user_assertion_signature`, base64url)
+  covers `instance_assertion_signed_bytes`: the legacy
+  `user_assertion_signed_bytes` (byte-for-byte back-compat) **extended**,
+  when a binding is present, under a `user-binding` domain separator with
+  the user pubkey + suite. So the instance signature *commits to the
+  specific user key* — verified against the envelope sender's pinned
+  instance key, this closes the key-transplant flaw (a swapped user key
+  can't reuse the household's instance signature).
+
+The suite tag is `user_sig_suite` (today only
+`USER_SIG_SUITE_ED25519 = "ed25519"`, validated against
+`SUPPORTED_USER_SIG_SUITES`); a present-but-unknown suite raises
+`UnsupportedUserSigSuite` with **no default fallback** (a first-revision
+payload that omits the suite defaults to `ed25519`, the documented
+migration tripwire). Only the public half ever federates; the private
+seed is KEK-wrapped in `users.user_identity_private_key`. See
+[`protocol/user-identity.md`](protocol/user-identity.md).
+
 **Binary media chunks** (`federation/media_framing.py`,
 `federation/encoder.py:encrypt_bytes`) — media on the `fed-media-v1`
 DataChannel ships the raw chunk as `nonce(12) ‖ AES-256-GCM(ct+tag)`,
@@ -312,6 +342,11 @@ hex>$<hash hex>`. Parameters can be bumped without a schema change.
 | `instance_identity` | `pq_private_key` | ML-DSA-65 secret key | KEK AES-256-GCM | — |
 | `instance_identity` | `pq_public_key` | ML-DSA-65 public key (hex) | no | — |
 | `instance_identity` | `routing_secret` | 32-byte HMAC key (hex) | no *(local-only, never transmitted)* | — |
+| `users` | `user_identity_private_key` | 32-byte Ed25519 user seed (per-user identity, Phase 1) | KEK AES-256-GCM | — |
+| `users` | `user_identity_public_key` | 32-byte Ed25519 user public key (hex) | no | — |
+| `users` | `user_pq_private_key` | ML-DSA-65 user secret key (reserved for PQ; NULL in Phase 1) | KEK AES-256-GCM | — |
+| `users` | `user_pq_public_key` | ML-DSA-65 user public key (hex; reserved for PQ; NULL in Phase 1) | no | — |
+| `remote_users` | `user_identity_public_key` | Remote user's Ed25519 public key (hex), stored only after the dual-signed binding verifies | no | — |
 | `remote_instances` | `key_self_to_remote` | 32-byte session key | KEK AES-256-GCM | — |
 | `remote_instances` | `key_remote_to_self` | 32-byte session key | KEK AES-256-GCM | — |
 | `remote_instances` | `remote_identity_pk` | Peer Ed25519 public key (hex) | no | — |
@@ -442,6 +477,16 @@ grows naturally.
 - Wire: every outbound envelope emits the `signatures` map with the
   per-peer suite's algorithms. Every inbound envelope is rejected
   unless every entry verifies.
+- User identity: the per-user binding's `user_sig_suite` follows the
+  same suite contract. The PQ migration is wire-additive — grow
+  `SUPPORTED_USER_SIG_SUITES` with a sibling
+  `USER_SIG_SUITE_*` constant for the hybrid `"ed25519+mldsa65"` variant
+  and ship the parallel ML-DSA-65 user signature alongside the Ed25519
+  one (the reserved `user_pq_public_key` / `users.user_pq_*` columns
+  already hold the material). The signed-bytes layout is unchanged; a
+  v_25 receiver that only knows `"ed25519"` rejects the new suite via
+  `UnsupportedUserSigSuite` (no default fallback), so the variant ships
+  only once both sides advertise it.
 
 ### Phase 2 — post-quantum key agreement
 

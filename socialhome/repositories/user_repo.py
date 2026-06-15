@@ -36,6 +36,17 @@ class AbstractUserRepo(Protocol):
     async def set_admin(self, username: str, is_admin: bool) -> None: ...
     async def set_last_seen(self, user_id: str, at: str) -> None: ...
     async def set_tz(self, username: str, tz: str) -> None: ...
+    async def set_user_identity_key(
+        self,
+        username: str,
+        *,
+        public_key_hex: str,
+        private_key_wrapped: str,
+    ) -> None: ...
+    async def get_user_identity_keypair(
+        self,
+        username: str,
+    ) -> tuple[bytes, bytes] | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
 
     # Remote users --------------------------------------------------------
@@ -46,6 +57,12 @@ class AbstractUserRepo(Protocol):
         remote_username: str,
     ) -> RemoteUser | None: ...
     async def upsert_remote(self, remote: RemoteUser) -> None: ...
+    async def set_remote_user_identity_key(
+        self,
+        user_id: str,
+        *,
+        public_key_hex: str,
+    ) -> None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
     async def list_all_known_remote(self) -> list[RemoteUser]: ...
     async def get_instance_for_user(self, user_id: str) -> str | None: ...
@@ -107,10 +124,24 @@ class AbstractUserRepo(Protocol):
 
 
 class SqliteUserRepo:
-    """SQLite-backed :class:`AbstractUserRepo` implementation."""
+    """SQLite-backed :class:`AbstractUserRepo` implementation.
 
-    def __init__(self, db: AsyncDatabase) -> None:
+    ``key_manager`` is the household KEK used to unwrap each user's Ed25519
+    identity *private* seed at rest (``users.user_identity_private_key``). It
+    is unavailable when the repos are built (the KEK is loaded later, in
+    ``_on_startup``), so it can also be wired post-construction via
+    :meth:`attach_key_manager` — mirroring :class:`SqliteSpaceRepo`. Only
+    :meth:`get_user_identity_keypair` requires it; every other method works
+    without it.
+    """
+
+    def __init__(self, db: AsyncDatabase, *, key_manager=None) -> None:
         self._db = db
+        self._kek = key_manager
+
+    def attach_key_manager(self, key_manager) -> None:
+        """Wire the household KEK after construction (see class docstring)."""
+        self._kek = key_manager
 
     # ── Local users ─────────────────────────────────────────────────────
 
@@ -263,6 +294,56 @@ class SqliteUserRepo:
             (tz, username),
         )
 
+    async def set_user_identity_key(
+        self,
+        username: str,
+        *,
+        public_key_hex: str,
+        private_key_wrapped: str,
+    ) -> None:
+        """Persist a user's KEK-wrapped Ed25519 identity keypair (§Phase 1).
+
+        ``public_key_hex`` is the hex-encoded 32-byte public key (only the
+        public half ever federates); ``private_key_wrapped`` is the seed
+        sealed under the instance KEK via :class:`KeyManager`.
+        """
+        await self._db.enqueue(
+            "UPDATE users SET user_identity_public_key=?, "
+            "user_identity_private_key=? WHERE username=?",
+            (public_key_hex, private_key_wrapped, username),
+        )
+
+    async def get_user_identity_keypair(
+        self,
+        username: str,
+    ) -> tuple[bytes, bytes] | None:
+        """Return ``(public_key_bytes, private_seed_bytes)`` for ``username``.
+
+        The public key is decoded from the hex ``user_identity_public_key``
+        column; the private seed is the raw 32-byte Ed25519 seed recovered by
+        KEK-unwrapping ``user_identity_private_key`` (wrapped without
+        associated data by :meth:`UserService.provision`). Returns ``None``
+        when the user has no minted identity key yet (either column NULL) or
+        the username is unknown — never a partial pair. Requires the KEK to
+        have been wired (constructor or :meth:`attach_key_manager`).
+        """
+        if self._kek is None:
+            raise RuntimeError("user identity key access requires a key_manager")
+        row = await self._db.fetchone(
+            "SELECT user_identity_public_key, user_identity_private_key "
+            "FROM users WHERE username=?",
+            (username,),
+        )
+        if row is None:
+            return None
+        public_hex = row["user_identity_public_key"]
+        wrapped = row["user_identity_private_key"]
+        if public_hex is None or wrapped is None:
+            return None
+        public_key = bytes.fromhex(public_hex)
+        private_seed = self._kek.decrypt(wrapped)
+        return public_key, private_seed
+
     async def soft_delete(self, username: str, grace_days: int = 30) -> None:
         now = datetime.now(timezone.utc).isoformat()
         grace = datetime.now(timezone.utc).timestamp() + grace_days * 86400
@@ -343,6 +424,28 @@ class SqliteUserRepo:
                 remote.public_key_version,
                 remote.synced_at,
             ),
+        )
+
+    async def set_remote_user_identity_key(
+        self,
+        user_id: str,
+        *,
+        public_key_hex: str,
+    ) -> None:
+        """Persist a remote user's *verified* per-user identity public key.
+
+        Called by the inbound USERS_SYNC / USER_UPDATED handler **only after**
+        :func:`socialhome.crypto.verify_user_identity_assertion` has validated
+        the binding against the sender instance's pinned key — an unverified
+        key is never stored. Kept separate from :meth:`upsert_remote` (which
+        does not touch this column) so a legacy profile upsert can't clobber a
+        previously-verified key, and a failed verification leaves the existing
+        key intact. ``public_key_hex`` is the hex-encoded 32-byte Ed25519
+        user public key.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_users SET user_identity_public_key=? WHERE user_id=?",
+            (public_key_hex, user_id),
         )
 
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]:

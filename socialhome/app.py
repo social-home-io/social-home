@@ -51,6 +51,7 @@ from .hardening import (
 )
 from .i18n import Catalog
 from .identity_bootstrap import ensure_instance_identity
+from .infrastructure.user_identity import ensure_user_identities
 from .media_signer import MediaUrlSigner, derive_signing_key
 from .infrastructure import (
     DeliveryOutcome,
@@ -961,6 +962,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         visibility_repo=peer_user_visibility_repo,
+        user_repo=user_repo,
     )
     profile_federation_outbound.wire()
 
@@ -1986,6 +1988,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # The space repo wraps each space's Ed25519 seed under this KEK; it
         # was built in ``_build_repos`` before the KEK existed, so wire it now.
         space_repo.attach_key_manager(key_manager)
+        # The user repo unwraps each user's Ed25519 identity seed under the
+        # same KEK (proto-v_25 per-user identity binding) — same late-wiring.
+        user_repo.attach_key_manager(key_manager)
 
         # 2. Identity bootstrap — generates row on first start, returns
         #    decrypted seed + public key + derived instance_id. When the
@@ -1997,6 +2002,16 @@ def create_app(config: Config | None = None) -> web.Application:
             display_name=config.instance_name,
             sig_suite=config.federation_sig_suite,
         )
+        # Backfill a KEK-wrapped Ed25519 identity key for every local user
+        # lacking one (e.g. rows created before this feature, or by a bare
+        # UserService during early boot). Runs right after the instance
+        # identity + KEK exist; new users get theirs at provision time.
+        await ensure_user_identities(
+            db,
+            key_manager,
+            sig_suite=config.federation_sig_suite,
+        )
+
         identity_seed = identity.identity_seed
         identity_pk = identity.identity_public_key
         real_instance_id = identity.instance_id
@@ -2091,6 +2106,7 @@ def create_app(config: Config | None = None) -> web.Application:
             bus,
             own_instance_public_key=identity_pk,
             profile_picture_repo=profile_picture_repo,
+            key_manager=key_manager,
         )
         app[K.user_service_key] = real_user_service
 

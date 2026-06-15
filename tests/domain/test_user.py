@@ -9,6 +9,7 @@ from socialhome.domain.user import (
     RESERVED_USERNAMES,
     RemoteUser,
     User,
+    UserIdentityAssertion,
 )
 
 
@@ -62,3 +63,20 @@ def test_user_reserved_usernames_nonempty():
     """RESERVED_USERNAMES is a non-empty collection."""
     assert len(RESERVED_USERNAMES) > 0
     assert "admin" in RESERVED_USERNAMES
+
+
+def test_user_identity_assertion_user_binding_fields_default_none():
+    """The Phase-1 user-binding fields are nullable and default to None so a
+    legacy / first-revision payload that omits them still constructs."""
+    a = UserIdentityAssertion(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-01-01T00:00:00+00:00",
+        signature="sig",
+    )
+    assert a.user_identity_public_key is None
+    assert a.user_pq_public_key is None
+    assert a.user_sig_suite is None
+    assert a.user_signature is None

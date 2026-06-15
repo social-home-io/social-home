@@ -14,16 +14,44 @@ import base64
 
 import pytest
 
+from socialhome.crypto import (
+    USER_SIG_SUITE_ED25519,
+    build_user_identity_assertion,
+    derive_instance_id,
+    derive_user_id,
+    generate_identity_keypair,
+    verify_user_identity_assertion,
+)
 from socialhome.domain.events import PairingConfirmed
 from socialhome.domain.federation import FederationEventType
+from socialhome.domain.user import UserIdentityAssertion
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.users_sync_outbound import UsersSyncOutbound
 
 
 class _FakeFederationService:
-    def __init__(self, own_instance_id: str = "own-inst") -> None:
+    def __init__(
+        self,
+        own_instance_id: str = "own-inst",
+        *,
+        supports_v25: bool = False,
+        instance_seed: bytes | None = None,
+    ) -> None:
         self._own_instance_id = own_instance_id
+        self._own_identity_seed = instance_seed or b"\x01" * 32
+        self._supports_v25 = supports_v25
         self.sent: list[tuple[str, FederationEventType, dict]] = []
+
+    @property
+    def own_identity_seed(self) -> bytes:
+        return self._own_identity_seed
+
+    @property
+    def own_instance_id(self) -> str:
+        return self._own_instance_id
+
+    async def peer_supports(self, instance_id: str, *, min_version: int) -> bool:
+        return self._supports_v25
 
     async def send_event(self, *, to_instance_id, event_type, payload):
         self.sent.append((to_instance_id, event_type, payload))
@@ -47,11 +75,19 @@ class _FakeUser:
 
 
 class _FakeUserRepo:
-    def __init__(self, users: list[_FakeUser]) -> None:
+    def __init__(
+        self,
+        users: list[_FakeUser],
+        keypairs: dict[str, tuple[bytes, bytes]] | None = None,
+    ) -> None:
         self._users = users
+        self._keypairs = keypairs or {}
 
     async def list_active(self):
         return list(self._users)
+
+    async def get_user_identity_keypair(self, username: str):
+        return self._keypairs.get(username)
 
 
 class _FakePictureRepo:
@@ -235,3 +271,108 @@ async def test_picture_bytes_attached_when_available():
     assert by_id["u-bob"]["picture_hash"] == "h-bob"
     # Carol has no hash at all → no lookup attempted, no base64 field.
     assert "picture_webp_base64" not in by_id["u-carol"]
+
+
+async def test_v25_peer_gets_user_identity_binding():
+    """A v_25 peer receives the per-user identity binding fields and the
+    resulting assertion verifies against the instance public key."""
+    bus = EventBus()
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, "alice")
+    fed = _FakeFederationService(
+        own_instance_id=iid,
+        supports_v25=True,
+        instance_seed=instance_kp.private_key,
+    )
+    user_repo = _FakeUserRepo(
+        [_FakeUser(uid, "alice", "Alice", bio="hi")],
+        keypairs={"alice": (user_kp.public_key, user_kp.private_key)},
+    )
+    out = UsersSyncOutbound(
+        bus=bus,
+        federation_service=fed,
+        user_repo=user_repo,
+    )
+    out.wire()
+    await bus.publish(PairingConfirmed(instance_id="peer-new"))
+
+    payload = fed.sent[0][2]
+    entry = payload["users"][0]
+    assert entry["user_identity_public_key"] == user_kp.public_key.hex()
+    assert entry["user_sig_suite"] == USER_SIG_SUITE_ED25519
+    assert "user_signature" in entry
+    # The full self-verifying credential rides along: instance signature +
+    # issued_at let a relayed/cached copy be re-verified standalone.
+    assert "user_assertion_signature" in entry
+    assert "user_assertion_issued_at" in entry
+    # The legacy fields are unchanged alongside the binding.
+    assert entry["user_id"] == uid
+    assert entry["display_name"] == "Alice"
+
+    # The emitted entry reconstructs an assertion that verifies end-to-end.
+    reconstructed = UserIdentityAssertion(
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at=entry["user_assertion_issued_at"],
+        signature=entry["user_assertion_signature"],
+        user_identity_public_key=entry["user_identity_public_key"],
+        user_pq_public_key=None,
+        user_sig_suite=entry["user_sig_suite"],
+        user_signature=entry["user_signature"],
+    )
+    verify_user_identity_assertion(reconstructed, instance_kp.public_key)
+
+    reference = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-06-15T00:00:00+00:00",
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    assert entry["user_signature"] == reference.user_signature
+
+
+async def test_v24_peer_gets_legacy_shape_without_binding():
+    """A sub-v_25 peer gets exactly the legacy per-user shape — no binding
+    keys leak to a peer that can't validate them."""
+    bus = EventBus()
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    uid = derive_user_id(instance_kp.public_key, "alice")
+    fed = _FakeFederationService(
+        supports_v25=False,
+        instance_seed=instance_kp.private_key,
+    )
+    user_repo = _FakeUserRepo(
+        [_FakeUser(uid, "alice", "Alice", bio="hi")],
+        keypairs={"alice": (user_kp.public_key, user_kp.private_key)},
+    )
+    out = UsersSyncOutbound(
+        bus=bus,
+        federation_service=fed,
+        user_repo=user_repo,
+    )
+    out.wire()
+    await bus.publish(PairingConfirmed(instance_id="peer-new"))
+
+    entry = fed.sent[0][2]["users"][0]
+    assert entry == {
+        "user_id": uid,
+        "username": "alice",
+        "display_name": "Alice",
+        "bio": "hi",
+        "picture_hash": None,
+    }
+    assert "user_identity_public_key" not in entry
+    assert "user_sig_suite" not in entry
+    assert "user_signature" not in entry
+    assert "user_assertion_signature" not in entry
+    assert "user_assertion_issued_at" not in entry

@@ -12,6 +12,32 @@ and no centrally-hosted account system. A household's data lives on
 the household's disk; nothing leaves except encrypted federation
 envelopes, addressed to peers the household has chosen to pair with.
 
+## Identity model — household + per-user (§2)
+
+Every identity is bound to an Ed25519 public key, and identifiers are
+deterministic digests of that key (no central registry). Two layers
+exist:
+
+- The **instance** key is the household's transport + trust root: it
+  signs every federation envelope and anchors pairing.
+- Each user **also** has their **own** Ed25519 keypair (independent user
+  identity, **Phase 1** — capability v_25). The private seed is
+  KEK-wrapped and never federates; the public half plus a dual-signed
+  binding (the household vouches for the specific key, the user proves
+  possession) rides the existing user roster (`USERS_SYNC` /
+  `USER_UPDATED`).
+
+**In Phase 1 the legacy `user_id`
+(`derive_user_id(home_instance_pk, username)`) stays canonical.** The
+per-user key is a *soft alias* — additive, behaviour-neutral metadata; it
+does not yet replace `user_id` for addressing, display, or routing. Later
+phases make the user identity portable (a rename away from the
+instance-derived id, and member move-out). Any change that makes the
+per-user key *authoritative* over `user_id` — or relaxes the dual-sig /
+sender-pinned-key verification — is a §2 identity-model change that needs
+explicit reviewer sign-off. See
+[`protocol/user-identity.md`](protocol/user-identity.md).
+
 ## Encryption-first (§25.8.21)
 
 Every field in every outgoing federation event is encrypted unless the
