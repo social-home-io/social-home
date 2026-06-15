@@ -212,6 +212,103 @@ def test_verify_signed_author_inner_fail_closed_on_non_dict():
     assert verify_signed_author_inner({}) is False
 
 
+def test_identity_anchor_derivation_accepted():
+    """A public author whose ``author_user_id`` derives from a uuid
+    ``identity_anchor`` (NOT the username) is accepted — the anchor is the
+    derivation input when present."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"  # uuid4 hex, != username
+    # user_id derives from the ANCHOR, not the username.
+    user_id = derive_user_id(kp.public_key, anchor)
+    inner = build_signed_author_inner(
+        post=_post(author=user_id),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    assert inner["identity_anchor"] == anchor
+    # Username-derivation would NOT match this user_id (proves the anchor is
+    # genuinely the derivation input, not the username).
+    assert derive_user_id(kp.public_key, username) != user_id
+    assert verify_signed_author_inner(inner) is True
+
+
+def test_legacy_no_anchor_still_uses_username_derivation():
+    """Without an ``identity_anchor`` (legacy), username-derivation applies:
+    a user_id that doesn't derive from the username is rejected."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    # Legacy: user_id derives from the username, no anchor on the block.
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, username)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=None,
+    )
+    assert "identity_anchor" not in inner or inner["identity_anchor"] is None
+    assert verify_signed_author_inner(inner) is True
+    # A username-derivation MISMATCH (no anchor) is rejected.
+    bad = dict(inner)
+    bad["author_user_id"] = "not-the-right-id"
+    assert verify_signed_author_inner(bad) is False
+
+
+def test_forged_identity_anchor_rejected():
+    """A swapped ``identity_anchor`` (user_id no longer derives from it) is
+    rejected — and because the anchor is signed, the author_sig also breaks."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    user_id = derive_user_id(kp.public_key, anchor)
+    inner = build_signed_author_inner(
+        post=_post(author=user_id),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    assert verify_signed_author_inner(inner) is True
+    # Forge the anchor — user_id no longer derives from it.
+    inner["identity_anchor"] = "ffffffffffffffffffffffffffffffff"
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_identity_anchor_is_signed_and_roundtrips():
+    """``identity_anchor`` is bound to the author signature so a relayer cannot
+    strip or swap it undetectably."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, anchor)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    # The anchor is part of the signed bytes.
+    assert author_signing_bytes(_inner(identity_anchor=anchor)) != author_signing_bytes(
+        _inner(identity_anchor="different")
+    )
+    # Round-trips with the anchor signed.
+    assert verify_signed_author_inner(inner) is True
+    # Stripping the anchor after signing breaks verification (sig was over it).
+    stripped = dict(inner)
+    stripped.pop("identity_anchor")
+    assert verify_signed_author_inner(stripped) is False
+
+
 def test_hidden_from_feed_is_signed_and_roundtrips():
     """``hidden_from_feed`` is bound to the author signature so a relayer
     cannot flip feed visibility undetectably."""

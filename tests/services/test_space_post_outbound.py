@@ -10,6 +10,7 @@ import pytest
 
 from socialhome.crypto import (
     b64url_decode,
+    derive_user_id,
     generate_identity_keypair,
     verify_ed25519,
 )
@@ -23,7 +24,10 @@ from socialhome.domain.post import Post, PostType
 from socialhome.domain.space import SpaceType
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.space_post_outbound import SpacePostOutbound
-from socialhome.services.space_public_author import author_signing_bytes
+from socialhome.services.space_public_author import (
+    author_signing_bytes,
+    verify_signed_author_inner,
+)
 
 
 @dataclass
@@ -34,6 +38,7 @@ class _FakeSpace:
 @dataclass
 class _FakeUser:
     username: str
+    identity_anchor: str | None = None
 
 
 class _FakeSpaceRepo:
@@ -520,7 +525,13 @@ async def test_public_space_post_attaches_signed_public_relay(tier):
     federation.broadcast_to_space_members = AsyncMock()
     keypair = generate_identity_keypair()
     space_repo = _FakeSpaceRepo({"sp-1": _FakeSpace(space_type=tier)})
-    user_repo = _FakeUserRepo({"uid-alice": _FakeUser(username="alice")})
+    # author_user_id derives from the uuid anchor (not the username), so the
+    # relay-hint MUST carry the anchor for a seed-holding member's self-cert.
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    anchored_uid = derive_user_id(keypair.public_key, anchor)
+    user_repo = _FakeUserRepo(
+        {anchored_uid: _FakeUser(username="alice", identity_anchor=anchor)}
+    )
     _make_outbound(
         bus=bus,
         federation=federation,
@@ -531,7 +542,7 @@ async def test_public_space_post_attaches_signed_public_relay(tier):
 
     post = Post(
         id="post-pub",
-        author="uid-alice",
+        author=anchored_uid,
         type=PostType.TEXT,
         content="public hello",
         created_at=datetime(2026, 5, 23, 12, 0, 0, tzinfo=timezone.utc),
@@ -541,10 +552,14 @@ async def test_public_space_post_attaches_signed_public_relay(tier):
     payload = federation.broadcast_to_space_members.call_args.args[2]
     relay = payload["public_relay"]
     assert relay["post_id"] == "post-pub"
-    assert relay["author_user_id"] == "uid-alice"
+    assert relay["author_user_id"] == anchored_uid
     assert relay["author_username"] == "alice"
     assert relay["author_pk"] == keypair.public_key.hex()
+    assert relay["identity_anchor"] == anchor
     assert relay["origin_instance_id"] == "inst-self"
+    # The relay self-certifies via the anchor (username derivation would not).
+    assert derive_user_id(keypair.public_key, "alice") != anchored_uid
+    assert verify_signed_author_inner(relay)
     # The per-author signature verifies against the attached pubkey over the
     # canonical, domain-separated signing bytes.
     assert verify_ed25519(

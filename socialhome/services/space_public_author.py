@@ -49,12 +49,18 @@ _AUTHOR_SIG_DOMAIN: bytes = b"space-post-author:v1:"
 #: post; ``author_sig`` itself is excluded (it signs the rest).
 #: ``hidden_from_feed`` is signed too — it binds presentation intent to the
 #: author so a relayer can't flip feed visibility undetectably.
+#: ``identity_anchor`` is signed too — it is the derivation input for
+#: ``author_user_id`` when present (a uuid for new users; absent/None for
+#: legacy rows whose user_id derives from the mutable username). Binding it to
+#: the author signature stops a relayer from stripping/swapping it to bypass
+#: the self-cert check undetectably (§v_26 identity anchor).
 _SIGNED_FIELDS: tuple[str, ...] = (
     "post_id",
     "space_id",
     "author_user_id",
     "author_pk",
     "author_username",
+    "identity_anchor",
     "type",
     "content",
     "media_url",
@@ -88,6 +94,7 @@ def build_signed_author_inner(
     author_pk: bytes,
     author_identity_seed: bytes,
     origin_instance_id: str,
+    author_identity_anchor: str | None = None,
 ) -> dict:
     """Build the per-author-signed inner payload for a public/global space
     post (the object the GFS relay encrypts + a subscriber verifies).
@@ -103,6 +110,9 @@ def build_signed_author_inner(
         "author_user_id": post.author,
         "author_pk": author_pk.hex(),
         "author_username": author_username,
+        # The derivation input for ``author_user_id`` (uuid for new users);
+        # None for legacy authors whose user_id derives from the username.
+        "identity_anchor": author_identity_anchor,
         "type": post.type.value,
         "content": post.content,
         "media_url": post.media_url,
@@ -143,11 +153,21 @@ def verify_signed_author_inner(inner: dict) -> bool:
     username = str(inner.get("author_username") or "")
     if not (post_id and author_user_id and author_pk_hex and username):
         return False
-    # Author self-cert: the user id MUST be derivable from author_pk + username
-    # (binds author_pk ↔ author_user_id — both PUBLIC, so on its own this can't
+    # Author self-cert: the user id MUST be derivable from author_pk + the
+    # derivation input — the immutable ``identity_anchor`` (uuid) when the block
+    # carries one (§v_26), else the (legacy) username. Mirrors the user-identity
+    # assertion derivation in crypto.verify_user_identity_assertion. The anchor
+    # is part of the signed bytes, so a relayer can't swap it to forge a match.
+    # Binds author_pk ↔ author_user_id (both PUBLIC, so on its own this can't
     # prevent attribution forgery; the author_sig below closes that hole).
+    anchor = inner.get("identity_anchor")
+    author_identity_anchor = anchor if isinstance(anchor, str) and anchor else None
+    derivation_input = author_identity_anchor or username
     try:
-        if derive_user_id(bytes.fromhex(author_pk_hex), username) != author_user_id:
+        if (
+            derive_user_id(bytes.fromhex(author_pk_hex), derivation_input)
+            != author_user_id
+        ):
             return False
     except ValueError:
         return False
