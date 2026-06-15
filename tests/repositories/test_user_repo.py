@@ -68,6 +68,62 @@ async def test_get_missing_user_returns_none(env):
     assert got is None
 
 
+async def test_get_user_identity_keypair_roundtrips_decrypted_seed(env):
+    """get_user_identity_keypair returns the raw (public, private-seed) bytes,
+    decrypting the KEK-wrapped private column via the attached key_manager."""
+    import os
+
+    from socialhome.crypto import generate_identity_keypair
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    km = KeyManager(os.urandom(32))
+    env.user_repo.attach_key_manager(km)
+    await env.user_svc.provision(username="alice", display_name="Alice")
+
+    kp = generate_identity_keypair()
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex=kp.public_key.hex(),
+        private_key_wrapped=km.encrypt(kp.private_key),
+    )
+
+    got = await env.user_repo.get_user_identity_keypair("alice")
+    assert got is not None
+    public_key, private_seed = got
+    assert public_key == kp.public_key
+    assert private_seed == kp.private_key
+
+
+async def test_get_user_identity_keypair_none_when_unminted(env):
+    """A user with no identity columns (NULL) returns None — never a partial
+    or crashing result."""
+    import os
+
+    from socialhome.infrastructure.key_manager import KeyManager
+
+    env.user_repo.attach_key_manager(KeyManager(os.urandom(32)))
+    # Provision WITHOUT a key_manager on the service so no key is minted.
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, state) VALUES(?,?,?,?)",
+        ("bob", "u-bob", "Bob", "active"),
+    )
+    assert await env.user_repo.get_user_identity_keypair("bob") is None
+    assert await env.user_repo.get_user_identity_keypair("nobody") is None
+
+
+async def test_get_user_identity_keypair_requires_key_manager(env):
+    """Without an attached KEK the getter raises — never returns a wrapped
+    blob masquerading as a seed."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.user_repo.set_user_identity_key(
+        "alice",
+        public_key_hex="ab" * 32,
+        private_key_wrapped="wrapped",
+    )
+    with pytest.raises(RuntimeError):
+        await env.user_repo.get_user_identity_keypair("alice")
+
+
 async def test_list_active_users(env):
     """list_active returns all users with active state."""
     await env.user_svc.provision(username="alice", display_name="Alice")

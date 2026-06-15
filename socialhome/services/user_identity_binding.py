@@ -1,0 +1,110 @@
+"""Per-user identity-binding wire fields for outbound user publication.
+
+Phase 1 of the independent user identity (§ user-identity, proto v_25): when
+a household publishes one of its users to a peer — via the ``USERS_SYNC``
+roster push on pair-confirm or the ``USER_UPDATED`` profile fan-out — the
+per-user payload may carry a *binding* that proves the user holds their own
+Ed25519 identity key, independent of the hosting instance.
+
+The binding is three fields:
+
+* ``user_identity_public_key`` — hex Ed25519 user public key,
+* ``user_sig_suite`` — the signature suite (``"ed25519"`` in Phase 1),
+* ``user_signature`` — the base64url USER self-signature.
+
+They ride alongside the existing legacy per-user fields, never replacing
+them. They are emitted **only** for a peer that advertises v_25
+(:data:`FederationCapability.MIN_FOR_USER_IDENTITY_KEY`) — an older peer
+can't validate them and would mis-handle the wire shape, so it gets exactly
+the legacy payload. The binding is also skipped when the user has no minted
+identity key (an early-boot row the startup backfill hasn't reached yet) or
+when no ``user_repo`` is wired to fetch the keypair.
+
+Both outbound services call :func:`user_identity_binding_fields` so the gate,
+the key-handling and the suite stay in one place.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+from ..crypto import USER_SIG_SUITE_ED25519, build_user_identity_assertion
+from ..domain.federation_capabilities import FederationCapability
+
+if TYPE_CHECKING:
+    from ..federation.federation_service import FederationService
+    from ..repositories.user_repo import AbstractUserRepo
+
+log = logging.getLogger(__name__)
+
+
+async def user_identity_binding_fields(
+    *,
+    federation_service: "FederationService",
+    user_repo: "AbstractUserRepo | None",
+    peer_instance_id: str,
+    user_id: str,
+    username: str,
+    display_name: str,
+    picture_hash: str | None = None,
+) -> dict[str, str]:
+    """Return the per-user identity-binding wire fields for one user/peer.
+
+    Empty dict (legacy shape) when:
+
+    * ``user_repo`` is ``None`` (the service wasn't wired with one), or
+    * the peer doesn't support v_25, or
+    * the user has no minted identity keypair.
+
+    Otherwise the returned dict carries ``user_identity_public_key`` /
+    ``user_sig_suite`` / ``user_signature`` — the three issued-at-independent
+    binding fields lifted off a freshly built assertion. Fail-soft: any error
+    fetching the keypair or building the binding degrades to the legacy shape
+    rather than dropping the user from the snapshot.
+    """
+    if user_repo is None:
+        return {}
+    if not await federation_service.peer_supports(
+        peer_instance_id,
+        min_version=FederationCapability.MIN_FOR_USER_IDENTITY_KEY,
+    ):
+        return {}
+
+    try:
+        keypair = await user_repo.get_user_identity_keypair(username)
+    except Exception as exc:  # pragma: no cover — defensive, fail-soft
+        log.warning(
+            "user-identity-binding: keypair lookup for %s failed: %s",
+            username,
+            exc,
+        )
+        return {}
+    if keypair is None:
+        return {}
+    user_public_key, user_seed = keypair
+
+    assertion = build_user_identity_assertion(
+        instance_seed=federation_service.own_identity_seed,
+        user_id=user_id,
+        instance_id=federation_service.own_instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=datetime.now(timezone.utc).isoformat(),
+        picture_hash=picture_hash,
+        user_seed=user_seed,
+        user_public_key=user_public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    if (
+        assertion.user_identity_public_key is None
+        or assertion.user_sig_suite is None
+        or assertion.user_signature is None
+    ):  # pragma: no cover — both halves were supplied, so always present
+        return {}
+    return {
+        "user_identity_public_key": assertion.user_identity_public_key,
+        "user_sig_suite": assertion.user_sig_suite,
+        "user_signature": assertion.user_signature,
+    }

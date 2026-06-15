@@ -12,6 +12,14 @@ from __future__ import annotations
 
 import pytest
 
+from socialhome.crypto import (
+    USER_SIG_SUITE_ED25519,
+    build_user_identity_assertion,
+    derive_instance_id,
+    derive_user_id,
+    generate_identity_keypair,
+    verify_user_identity_assertion,
+)
 from socialhome.domain.events import UserProfileUpdated
 from socialhome.domain.federation import FederationEventType
 from socialhome.infrastructure.event_bus import EventBus
@@ -21,8 +29,16 @@ from socialhome.services.profile_federation_outbound import (
 
 
 class _FakeFederationService:
-    def __init__(self, own_instance_id: str = "own-inst") -> None:
+    def __init__(
+        self,
+        own_instance_id: str = "own-inst",
+        *,
+        supports_v25: bool = False,
+        instance_seed: bytes | None = None,
+    ) -> None:
         self._own_instance_id = own_instance_id
+        self._own_identity_seed = instance_seed or b"\x01" * 32
+        self._supports_v25 = supports_v25
         self.sent: list[tuple[str, FederationEventType, dict]] = []
 
     @property
@@ -31,9 +47,24 @@ class _FakeFederationService:
         # outbound mixins read the public property, not the private attr.
         return self._own_instance_id
 
+    @property
+    def own_identity_seed(self) -> bytes:
+        return self._own_identity_seed
+
+    async def peer_supports(self, instance_id: str, *, min_version: int) -> bool:
+        return self._supports_v25
+
     async def send_event(self, *, to_instance_id, event_type, payload):
         self.sent.append((to_instance_id, event_type, payload))
         return None
+
+
+class _FakeUserRepo:
+    def __init__(self, keypairs: dict[str, tuple[bytes, bytes]]) -> None:
+        self._keypairs = keypairs
+
+    async def get_user_identity_keypair(self, username: str):
+        return self._keypairs.get(username)
 
 
 class _Peer:
@@ -168,3 +199,96 @@ async def test_peer_id_missing_is_skipped():
     out.wire()
     await bus.publish(_event())
     assert [r[0] for r in fed.sent] == ["good"]
+
+
+async def test_v25_peer_gets_user_identity_binding():
+    """A v_25 peer's USER_UPDATED payload carries the per-user binding fields
+    and the resulting assertion verifies against the instance public key."""
+    bus = EventBus()
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, "alice")
+    fed = _FakeFederationService(
+        own_instance_id=iid,
+        supports_v25=True,
+        instance_seed=instance_kp.private_key,
+    )
+    repo = _FakeFedRepo(["peer-1"])
+    user_repo = _FakeUserRepo({"alice": (user_kp.public_key, user_kp.private_key)})
+    out = ProfileFederationOutbound(
+        bus=bus,
+        federation_service=fed,
+        federation_repo=repo,
+        user_repo=user_repo,
+    )
+    out.wire()
+    await bus.publish(_event(user_id=uid, username="alice", display_name="Alice"))
+
+    payload = fed.sent[0][2]
+    assert payload["user_identity_public_key"] == user_kp.public_key.hex()
+    assert payload["user_sig_suite"] == USER_SIG_SUITE_ED25519
+    assert "user_signature" in payload
+    assert payload["display_name"] == "Alice"
+
+    reference = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-06-15T00:00:00+00:00",
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    assert payload["user_signature"] == reference.user_signature
+    verify_user_identity_assertion(reference, instance_kp.public_key)
+
+
+async def test_v24_peer_gets_legacy_shape_without_binding():
+    """A sub-v_25 peer gets exactly the legacy USER_UPDATED shape."""
+    bus = EventBus()
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    uid = derive_user_id(instance_kp.public_key, "alice")
+    fed = _FakeFederationService(
+        supports_v25=False,
+        instance_seed=instance_kp.private_key,
+    )
+    repo = _FakeFedRepo(["peer-1"])
+    user_repo = _FakeUserRepo({"alice": (user_kp.public_key, user_kp.private_key)})
+    out = ProfileFederationOutbound(
+        bus=bus,
+        federation_service=fed,
+        federation_repo=repo,
+        user_repo=user_repo,
+    )
+    out.wire()
+    await bus.publish(_event(user_id=uid, username="alice", display_name="Alice"))
+
+    payload = fed.sent[0][2]
+    assert payload == {
+        "user_id": uid,
+        "username": "alice",
+        "display_name": "Alice",
+        "bio": "hello",
+        "picture_hash": "h1",
+    }
+
+
+async def test_binding_omitted_when_no_user_repo_wired():
+    """Without a user_repo the service can't fetch the identity key, so it
+    falls back to the legacy shape even for a v_25 peer (back-compat wiring)."""
+    bus = EventBus()
+    fed = _FakeFederationService(supports_v25=True)
+    repo = _FakeFedRepo(["peer-1"])
+    out = ProfileFederationOutbound(
+        bus=bus,
+        federation_service=fed,
+        federation_repo=repo,
+    )
+    out.wire()
+    await bus.publish(_event())
+    payload = fed.sent[0][2]
+    assert "user_identity_public_key" not in payload

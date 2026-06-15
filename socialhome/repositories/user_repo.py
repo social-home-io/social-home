@@ -43,6 +43,10 @@ class AbstractUserRepo(Protocol):
         public_key_hex: str,
         private_key_wrapped: str,
     ) -> None: ...
+    async def get_user_identity_keypair(
+        self,
+        username: str,
+    ) -> tuple[bytes, bytes] | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
 
     # Remote users --------------------------------------------------------
@@ -114,10 +118,24 @@ class AbstractUserRepo(Protocol):
 
 
 class SqliteUserRepo:
-    """SQLite-backed :class:`AbstractUserRepo` implementation."""
+    """SQLite-backed :class:`AbstractUserRepo` implementation.
 
-    def __init__(self, db: AsyncDatabase) -> None:
+    ``key_manager`` is the household KEK used to unwrap each user's Ed25519
+    identity *private* seed at rest (``users.user_identity_private_key``). It
+    is unavailable when the repos are built (the KEK is loaded later, in
+    ``_on_startup``), so it can also be wired post-construction via
+    :meth:`attach_key_manager` — mirroring :class:`SqliteSpaceRepo`. Only
+    :meth:`get_user_identity_keypair` requires it; every other method works
+    without it.
+    """
+
+    def __init__(self, db: AsyncDatabase, *, key_manager=None) -> None:
         self._db = db
+        self._kek = key_manager
+
+    def attach_key_manager(self, key_manager) -> None:
+        """Wire the household KEK after construction (see class docstring)."""
+        self._kek = key_manager
 
     # ── Local users ─────────────────────────────────────────────────────
 
@@ -288,6 +306,37 @@ class SqliteUserRepo:
             "user_identity_private_key=? WHERE username=?",
             (public_key_hex, private_key_wrapped, username),
         )
+
+    async def get_user_identity_keypair(
+        self,
+        username: str,
+    ) -> tuple[bytes, bytes] | None:
+        """Return ``(public_key_bytes, private_seed_bytes)`` for ``username``.
+
+        The public key is decoded from the hex ``user_identity_public_key``
+        column; the private seed is the raw 32-byte Ed25519 seed recovered by
+        KEK-unwrapping ``user_identity_private_key`` (wrapped without
+        associated data by :meth:`UserService.provision`). Returns ``None``
+        when the user has no minted identity key yet (either column NULL) or
+        the username is unknown — never a partial pair. Requires the KEK to
+        have been wired (constructor or :meth:`attach_key_manager`).
+        """
+        if self._kek is None:
+            raise RuntimeError("user identity key access requires a key_manager")
+        row = await self._db.fetchone(
+            "SELECT user_identity_public_key, user_identity_private_key "
+            "FROM users WHERE username=?",
+            (username,),
+        )
+        if row is None:
+            return None
+        public_hex = row["user_identity_public_key"]
+        wrapped = row["user_identity_private_key"]
+        if public_hex is None or wrapped is None:
+            return None
+        public_key = bytes.fromhex(public_hex)
+        private_seed = self._kek.decrypt(wrapped)
+        return public_key, private_seed
 
     async def soft_delete(self, username: str, grace_days: int = 30) -> None:
         now = datetime.now(timezone.utc).isoformat()

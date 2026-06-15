@@ -962,6 +962,7 @@ def _wire_federation_stack(
         federation_service=federation_service,
         federation_repo=federation_repo,
         visibility_repo=peer_user_visibility_repo,
+        user_repo=user_repo,
     )
     profile_federation_outbound.wire()
 
@@ -1987,6 +1988,9 @@ def create_app(config: Config | None = None) -> web.Application:
         # The space repo wraps each space's Ed25519 seed under this KEK; it
         # was built in ``_build_repos`` before the KEK existed, so wire it now.
         space_repo.attach_key_manager(key_manager)
+        # The user repo unwraps each user's Ed25519 identity seed under the
+        # same KEK (proto-v_25 per-user identity binding) — same late-wiring.
+        user_repo.attach_key_manager(key_manager)
 
         # 2. Identity bootstrap — generates row on first start, returns
         #    decrypted seed + public key + derived instance_id. When the
