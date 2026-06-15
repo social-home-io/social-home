@@ -384,7 +384,17 @@ from __future__ import annotations
 #:   before. **Best-effort.** Per-user surface, not space-scoped — its lag
 #:   affects only the two households exchanging the user roster, so it is
 #:   deliberately kept out of the per-space compatibility banner.
-OURS: int = 25
+#: * **v_26** (2026-06-15) — user_id derivation anchored to immutable
+#:   identity_anchor. New users get a UUID identity_anchor; existing
+#:   users are frozen to their username as the identity_anchor so their
+#:   user_id remains stable across a rename. Senders gate the identity_anchor
+#:   field on :data:`FederationCapability.MIN_FOR_IDENTITY_ANCHOR`; sub-v_26
+#:   peers fall back to username-derived user_id (today's behaviour) and keep
+#:   addressing users by the legacy ``user_id`` field unaffected. **Best-effort.**
+#:   Per-user surface, not space-scoped — its lag affects only the two
+#:   households exchanging the user roster, so it is deliberately kept out
+#:   of the per-space compatibility banner.
+OURS: int = 26
 
 
 class FederationCapability:
@@ -606,6 +616,18 @@ class FederationCapability:
     #: is intentionally excluded from the per-space compatibility banner.
     MIN_FOR_USER_IDENTITY_KEY = 25
 
+    #: Minimum proto_version where the peer accepts the identity_anchor field
+    #: on :data:`FederationEventType.USERS_SYNC` / :data:`USER_UPDATED` that
+    #: anchors ``user_id`` derivation to an immutable identifier (UUID for new
+    #: users, frozen username for existing users) instead of the current
+    #: username. The sender gates the extra field on this; a sub-v_26 peer
+    #: receives the legacy user shape (no identity_anchor) and derives user_id
+    #: from username exactly as before — best-effort, the legacy ``user_id``
+    #: field is unaffected. Per-user surface (not space-scoped): its lag affects
+    #: only the two households exchanging the roster, so it is intentionally
+    #: excluded from the per-space compatibility banner.
+    MIN_FOR_IDENTITY_ANCHOR = 26
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -661,6 +683,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (
         FederationCapability.MIN_FOR_USER_IDENTITY_KEY,
         "Per-user identity binding",
+    ),
+    (
+        FederationCapability.MIN_FOR_IDENTITY_ANCHOR,
+        "UUID identity anchor",
     ),
 ]
 
