@@ -6,7 +6,11 @@ import json
 
 import pytest
 
-from socialhome.crypto import generate_identity_keypair, derive_instance_id
+from socialhome.crypto import (
+    generate_identity_keypair,
+    derive_instance_id,
+    derive_user_id,
+)
 from socialhome.db.database import AsyncDatabase
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.infrastructure.key_manager import KeyManager
@@ -45,6 +49,7 @@ async def stack(tmp_dir):
     s.user_repo = user_repo
     s.user_svc = user_svc
     s.key_manager = key_manager
+    s.own_instance_pk = kp.public_key
 
     async def provision_user(username, **kw):
         return await user_svc.provision(username=username, display_name=username, **kw)
@@ -77,6 +82,23 @@ async def test_provision_mints_user_identity_key(stack):
     # Private half is KEK-wrapped and decrypts to the 32-byte seed.
     seed = stack.key_manager.decrypt(row["user_identity_private_key"])
     assert len(seed) == 32
+
+
+async def test_provision_new_user_uses_uuid_anchor(stack):
+    """A newly provisioned user gets a uuid4 identity_anchor and derives
+    user_id from the anchor (not the username)."""
+    await stack.provision_user("pascal")
+    row = await stack.db.fetchone(
+        "SELECT identity_anchor, user_id FROM users WHERE username=?",
+        ("pascal",),
+    )
+    anchor = row["identity_anchor"]
+    assert anchor is not None
+    assert anchor != "pascal"
+    # uuid4().hex is 32 lowercase hex chars.
+    assert len(bytes.fromhex(anchor)) == 16
+    assert row["user_id"] == derive_user_id(stack.own_instance_pk, anchor)
+    assert row["user_id"] != derive_user_id(stack.own_instance_pk, "pascal")
 
 
 async def test_idempotent_provision(stack):

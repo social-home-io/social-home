@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -137,7 +138,13 @@ class UserService:
         if source not in ("manual", "ha"):
             raise ValueError(f"invalid source {source!r}")
         display = display_name.strip() or username
-        user_id = derive_user_id(self._own_instance_pk, username)
+        # New users derive their cryptographic user_id from an immutable
+        # uuid4 identity_anchor rather than the (mutable) username, so a
+        # future rename leaves user_id stable (§v_26). Existing rows keep
+        # their username-derived id via the migration-0041 backfill — the
+        # reactivate branch below never re-derives.
+        identity_anchor = uuid.uuid4().hex
+        user_id = derive_user_id(self._own_instance_pk, identity_anchor)
 
         existing = await self._repo.get(username)
         if existing is not None:
@@ -164,6 +171,7 @@ class UserService:
             email=email,
             created_at=datetime.now(timezone.utc).isoformat(),
             source=source,
+            identity_anchor=identity_anchor,
         )
         await self._repo.save(user)
         # Mint a KEK-wrapped Ed25519 identity key for the new user so they

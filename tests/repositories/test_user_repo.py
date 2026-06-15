@@ -45,6 +45,29 @@ async def test_save_and_get_by_username(env):
     assert got.user_id == u.user_id
 
 
+async def test_save_persists_and_reads_back_identity_anchor(env):
+    """The repo round-trips the identity_anchor column on a saved User."""
+    from socialhome.domain.user import User
+
+    await env.user_repo.save(
+        User(
+            user_id="uid-anchored",
+            username="anchored",
+            display_name="Anchored",
+            identity_anchor="deadbeef" * 4,
+        )
+    )
+    got = await env.user_repo.get("anchored")
+    assert got is not None
+    assert got.identity_anchor == "deadbeef" * 4
+    # And it landed in the column, not just the dataclass.
+    row = await env.db.fetchone(
+        "SELECT identity_anchor FROM users WHERE username=?",
+        ("anchored",),
+    )
+    assert row["identity_anchor"] == "deadbeef" * 4
+
+
 async def test_set_user_identity_key_persists_both_halves(env):
     """set_user_identity_key writes the public + KEK-wrapped private columns."""
     await env.user_svc.provision(username="alice", display_name="Alice")
