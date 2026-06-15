@@ -374,7 +374,17 @@ from __future__ import annotations
 #:   the legacy ``from_instance == owner`` gate (back-compat). Space-scoped:
 #:   a behind member household won't accept a delegated admin's offline
 #:   config edit, so it warns in the per-space compatibility banner.
-OURS: int = 24
+#: * **v_25** (2026-06-15) — per-user identity binding (user pubkey +
+#:   dual-signed assertion) in
+#:   :data:`FederationEventType.USERS_SYNC` / :data:`USER_UPDATED`; older
+#:   peers omit it, legacy ``user_id`` unaffected. The sender gates the
+#:   extra field on :data:`FederationCapability.MIN_FOR_USER_IDENTITY_KEY`,
+#:   so a sub-v_25 peer simply receives the legacy user shape (no per-user
+#:   identity key) and keeps addressing users by ``user_id`` exactly as
+#:   before. **Best-effort.** Per-user surface, not space-scoped — its lag
+#:   affects only the two households exchanging the user roster, so it is
+#:   deliberately kept out of the per-space compatibility banner.
+OURS: int = 25
 
 
 class FederationCapability:
@@ -585,6 +595,17 @@ class FederationCapability:
     #: ``from_instance == owner`` path (back-compat). Best-effort, space-scoped.
     MIN_FOR_ADMIN_AUTHORITATIVE_OPS = 24
 
+    #: Minimum proto_version where the peer accepts the per-user identity
+    #: binding (the user's public key + dual-signed assertion) carried on
+    #: :data:`FederationEventType.USERS_SYNC` / :data:`USER_UPDATED`. The
+    #: sender gates the extra field on this; a sub-v_25 peer receives the
+    #: legacy user shape (no per-user identity key) and keeps addressing
+    #: users by ``user_id`` exactly as before — best-effort, the legacy
+    #: ``user_id`` field is unaffected. Per-user surface (not space-scoped):
+    #: its lag affects only the two households exchanging the roster, so it
+    #: is intentionally excluded from the per-space compatibility banner.
+    MIN_FOR_USER_IDENTITY_KEY = 25
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -637,6 +658,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
         FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS,
         "Admin authoritative config offline",
     ),
+    (
+        FederationCapability.MIN_FOR_USER_IDENTITY_KEY,
+        "Per-user identity binding",
+    ),
 ]
 
 
@@ -666,6 +691,9 @@ def features_missing_below(version: int) -> list[str]:
 #: * ``MIN_FOR_HOME_LOCATION_BROADCAST`` — per-pair home-location sharing.
 #: * ``MIN_FOR_APP_CHANNEL`` / ``MIN_FOR_APP_USER_ROUTING`` — Social Home Apps
 #:   ride a per-pair / per-user session, not a space content surface.
+#: * ``MIN_FOR_USER_IDENTITY_KEY`` — per-user identity binding on the user
+#:   roster (USERS_SYNC / USER_UPDATED); its lag affects only the two
+#:   households exchanging the roster, not a shared space.
 SPACE_SCOPED_MIN_VERSIONS: frozenset[int] = frozenset(
     {
         FederationCapability.MIN_FOR_SPACE_INVITE_REDEEM,
