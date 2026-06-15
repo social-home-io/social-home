@@ -204,3 +204,26 @@ async def test_0040_user_identity_columns(tmp_path):
     )
 
     await db.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_0041_identity_anchor_columns(tmp_path):
+    """Migration 0041 adds identity_anchor (immutable user UUID) to users and
+    remote_users. Existing users backfill to their current username so user_id
+    is unchanged."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+
+    # Check users table has identity_anchor
+    users_cols = {r["name"] for r in await db.fetchall("PRAGMA table_info(users)")}
+    assert "identity_anchor" in users_cols, "identity_anchor missing from users table"
+
+    # Check remote_users table has identity_anchor
+    remote_users_cols = {
+        r["name"] for r in await db.fetchall("PRAGMA table_info(remote_users)")
+    }
+    assert "identity_anchor" in remote_users_cols, (
+        "identity_anchor missing from remote_users table"
+    )
+
+    await db.shutdown()
