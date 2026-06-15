@@ -2524,6 +2524,15 @@ class FederationInboundService:
             )
             return
 
+        # KNOWN LIMITATION (Phase 1): this is an unconditional UPDATE. The
+        # assertion's ±24h issued_at staleness gate (in verify) bounds replay,
+        # but there is no per-user monotonic freshness check, so a captured
+        # ≤24h-old valid binding could replay over a *rotated* key (only ever to
+        # a prior LEGITIMATE key — attacker-key injection is blocked by the
+        # sender-pinned-key verification above). Inert in Phase 1: user-key
+        # rotation does not exist yet. Phase 3/4 (bindings cached + relayed
+        # standalone) MUST add a stored-issued_at monotonic guard before the
+        # UPDATE. See docs/protocol/capabilities.md v_25 + the design spec.
         await self._user_repo.set_remote_user_identity_key(
             user_id, public_key_hex=str(pubkey_hex)
         )
