@@ -21,6 +21,7 @@ from socialhome.crypto import (
     verify_user_identity_assertion,
 )
 from socialhome.domain.federation_capabilities import FederationCapability
+from socialhome.domain.user import UserIdentityAssertion
 from socialhome.services.user_identity_binding import user_identity_binding_fields
 
 
@@ -80,10 +81,17 @@ async def test_v25_peer_gets_verifiable_binding(instance_kp, user_kp):
         display_name="Alice",
     )
 
+    # The entry now carries the FULL self-verifying assertion: the three
+    # issued_at-independent binding fields PLUS the instance signature
+    # (``user_assertion_signature``) and the assertion's ``issued_at``
+    # (``user_assertion_issued_at``), so a relayed/cached copy can be
+    # re-verified outside the original signed envelope.
     assert set(fields) == {
         "user_identity_public_key",
         "user_sig_suite",
         "user_signature",
+        "user_assertion_signature",
+        "user_assertion_issued_at",
     }
     assert fields["user_identity_public_key"] == user_kp.public_key.hex()
     assert fields["user_sig_suite"] == USER_SIG_SUITE_ED25519
@@ -92,7 +100,25 @@ async def test_v25_peer_gets_verifiable_binding(instance_kp, user_kp):
         ("peer-1", FederationCapability.MIN_FOR_USER_IDENTITY_KEY)
     ]
 
-    # The emitted binding round-trips through a fully-built assertion.
+    # The emitted fields reconstruct an assertion that verifies end-to-end
+    # against the issuing instance's public key — proving the entry is a
+    # standalone, self-verifying portable credential.
+    reconstructed = UserIdentityAssertion(
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at=fields["user_assertion_issued_at"],
+        signature=fields["user_assertion_signature"],
+        user_identity_public_key=fields["user_identity_public_key"],
+        user_pq_public_key=None,
+        user_sig_suite=fields["user_sig_suite"],
+        user_signature=fields["user_signature"],
+    )
+    verify_user_identity_assertion(reconstructed, instance_kp.public_key)
+
+    # The three binding fields are issued_at-independent, so they match a
+    # reference assertion regardless of when it was minted.
     reference = build_user_identity_assertion(
         instance_seed=instance_kp.private_key,
         user_id=uid,
@@ -104,12 +130,9 @@ async def test_v25_peer_gets_verifiable_binding(instance_kp, user_kp):
         user_public_key=user_kp.public_key,
         user_sig_suite=USER_SIG_SUITE_ED25519,
     )
-    # The three binding fields are issued_at-independent, so they match a
-    # reference assertion regardless of when it was minted.
     assert fields["user_identity_public_key"] == reference.user_identity_public_key
     assert fields["user_sig_suite"] == reference.user_sig_suite
     assert fields["user_signature"] == reference.user_signature
-    verify_user_identity_assertion(reference, instance_kp.public_key)
 
 
 async def test_sub_v25_peer_gets_no_binding(instance_kp, user_kp):

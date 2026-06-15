@@ -1299,6 +1299,389 @@ async def test_users_sync_upserts_remote_users(db, inbound):
     assert rows[0]["remote_username"] == "alice"
 
 
+# ─── USERS_SYNC — per-user identity binding (proto v_25) ──────────
+
+
+class _BindingFakeFederation:
+    """Minimal federation stub exposing the sender's pinned identity key."""
+
+    def __init__(self, keys: dict[str, bytes]):
+        self._keys = keys
+        self._event_registry = MagicMock()
+        self.own_instance_id = "self"
+
+    async def peer_identity_public_key(self, instance_id: str):
+        return self._keys.get(instance_id)
+
+
+async def _seed_peer(db, instance_id: str, identity_pk_hex: str) -> None:
+    await db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk,
+               key_self_to_remote, key_remote_to_self,
+               remote_inbox_url, local_inbox_id,
+               status, source, created_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (
+            instance_id,
+            "Peer",
+            identity_pk_hex,
+            "enc",
+            "enc",
+            "https://peer/wh",
+            "wh-" + instance_id,
+            "confirmed",
+            "manual",
+            "2026-01-01T00:00:00+00:00",
+        ),
+    )
+
+
+def _binding_entry(*, instance_kp, user_kp, username="alice", display="Alice"):
+    """Build a USERS_SYNC per-user entry carrying the full self-verifying
+    identity binding, exactly as the outbound helper emits it."""
+    from datetime import datetime, timezone
+
+    from socialhome.crypto import (
+        USER_SIG_SUITE_ED25519,
+        build_user_identity_assertion,
+        derive_instance_id,
+        derive_user_id,
+    )
+
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, username)
+    assertion = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username=username,
+        display_name=display,
+        issued_at=datetime.now(timezone.utc).isoformat(),
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    return (
+        iid,
+        uid,
+        {
+            "user_id": uid,
+            "username": username,
+            "display_name": display,
+            "user_identity_public_key": assertion.user_identity_public_key,
+            "user_sig_suite": assertion.user_sig_suite,
+            "user_signature": assertion.user_signature,
+            "user_assertion_signature": assertion.signature,
+            "user_assertion_issued_at": assertion.issued_at,
+        },
+    )
+
+
+async def test_users_sync_stores_verified_identity_binding(db, bus):
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    assert row["user_identity_public_key"] == user_kp.public_key.hex()
+
+
+async def test_users_sync_tampered_user_signature_not_stored_but_upserted(
+    db, bus, caplog
+):
+    import logging
+
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    other_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+    # Swap in a foreign user self-signature → the binding self-sig is invalid.
+    _, _, other_entry = _binding_entry(instance_kp=instance_kp, user_kp=other_kp)
+    entry["user_signature"] = other_entry["user_signature"]
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    with caplog.at_level(logging.WARNING):
+        await service._on_users_sync(
+            _event(
+                FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid
+            )
+        )
+
+    row = await db.fetchone(
+        "SELECT user_identity_public_key, display_name FROM remote_users "
+        "WHERE user_id=?",
+        (uid,),
+    )
+    # Legacy upsert still happened; the unverified key was NOT stored.
+    assert row is not None
+    assert row["display_name"] == "Alice"
+    assert row["user_identity_public_key"] is None
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+async def test_users_sync_unknown_sig_suite_not_stored(db, bus):
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+    entry["user_sig_suite"] = "ed25519+martian"
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    assert row is not None
+    assert row["user_identity_public_key"] is None
+
+
+async def test_users_sync_instance_id_mismatch_not_stored(db, bus):
+    """A peer asserting a binding whose instance_id is NOT the sender it's
+    attributed to must not get its key stored (fail-soft)."""
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()  # the real issuer in the assertion
+    sender_kp = generate_identity_keypair()  # the envelope sender (different)
+    user_kp = generate_identity_keypair()
+    _iss_iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+
+    from socialhome.crypto import derive_instance_id
+
+    sender_iid = derive_instance_id(sender_kp.public_key)
+    await _seed_peer(db, sender_iid, sender_kp.public_key.hex())
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation(
+        {sender_iid: sender_kp.public_key}
+    )
+
+    # Attribute the entry to the SENDER, not the issuer baked into the assertion.
+    await service._on_users_sync(
+        _event(
+            FederationEventType.USERS_SYNC,
+            {"users": [entry]},
+            from_instance=sender_iid,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    # The row may not even exist (user_id is derived from the issuer key, not
+    # the sender), but if it does the key must not be stored.
+    if row is not None:
+        assert row["user_identity_public_key"] is None
+
+
+async def test_users_sync_absent_binding_stores_no_key(db, bus):
+    iid = "peer-legacy"
+    await _seed_peer(db, iid, "ab" * 32)
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({})
+
+    await service._on_users_sync(
+        _event(
+            FederationEventType.USERS_SYNC,
+            {"users": [{"user_id": "u-leg", "username": "leg", "display_name": "Leg"}]},
+            from_instance=iid,
+        )
+    )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        ("u-leg",),
+    )
+    assert row is not None
+    assert row["user_identity_public_key"] is None
+
+
+async def test_users_sync_binding_skipped_when_federation_unattached(db, bus):
+    """A binding-bearing entry on a service with no federation handle attached
+    upserts the legacy row but stores no key (fail-soft, no raise)."""
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    # No _federation_service attached.
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    assert row is not None
+    assert row["user_identity_public_key"] is None
+
+
+async def test_users_sync_binding_skipped_when_sender_key_unknown(db, bus, caplog):
+    """A binding from a sender whose pinned key can't be resolved is rejected
+    fail-soft with a WARNING; the legacy row is still upserted."""
+    import logging
+
+    from socialhome.crypto import generate_identity_keypair
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(instance_kp=instance_kp, user_kp=user_kp)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    # Federation attached but it returns None for the sender's key.
+    service._federation_service = _BindingFakeFederation({})
+
+    with caplog.at_level(logging.WARNING):
+        await service._on_users_sync(
+            _event(
+                FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid
+            )
+        )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key, display_name FROM remote_users "
+        "WHERE user_id=?",
+        (uid,),
+    )
+    assert row is not None
+    assert row["display_name"] == "Alice"
+    assert row["user_identity_public_key"] is None
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+async def test_users_sync_binding_roundtrip_outbound_to_inbound(db, bus):
+    """End-to-end: the outbound helper's exact entry shape, fed to the inbound
+    handler, lands a verified user identity key on ``remote_users``."""
+    from socialhome.crypto import (
+        derive_instance_id,
+        derive_user_id,
+        generate_identity_keypair,
+    )
+    from socialhome.services.user_identity_binding import (
+        user_identity_binding_fields,
+    )
+
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, "alice")
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    class _OutFed:
+        own_identity_seed = instance_kp.private_key
+        own_instance_id = iid
+
+        async def peer_supports(self, instance_id, *, min_version):
+            return True
+
+    class _OutUserRepo:
+        async def get_user_identity_keypair(self, username):
+            return (user_kp.public_key, user_kp.private_key)
+
+    binding = await user_identity_binding_fields(
+        federation_service=_OutFed(),
+        user_repo=_OutUserRepo(),
+        peer_instance_id="anybody",
+        user_id=uid,
+        username="alice",
+        display_name="Alice",
+    )
+    entry = {
+        "user_id": uid,
+        "username": "alice",
+        "display_name": "Alice",
+        **binding,
+    }
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+    row = await db.fetchone(
+        "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    assert row["user_identity_public_key"] == user_kp.public_key.hex()
+
+
 # ─── SPACE_MEDIA_BLOB — write the bytes the sender shipped ─────────
 
 

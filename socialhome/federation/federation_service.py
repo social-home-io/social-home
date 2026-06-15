@@ -663,6 +663,32 @@ class FederationService:
             return False
         return peer.proto_version >= min_version
 
+    async def peer_identity_public_key(self, instance_id: str) -> bytes | None:
+        """Return a known peer's pinned Ed25519 identity public key as bytes.
+
+        Decodes the hex ``remote_identity_pk`` stored on the peer's
+        ``remote_instances`` row — the same key the §24.11 inbound pipeline
+        verified the envelope signature against. Inbound handlers use it to
+        re-verify a *detached* credential (e.g. a relayed/cached per-user
+        identity binding) against its issuing instance.
+
+        Fail-soft: an unknown / unpaired peer, an empty id, or a malformed
+        stored key all yield ``None`` (never a raise) so a caller can degrade
+        rather than crash the inbound path.
+        """
+        if not instance_id:
+            return None
+        try:
+            peer = await self._federation_repo.get_instance(instance_id)
+        except Exception:  # pragma: no cover — defensive
+            return None
+        if peer is None:
+            return None
+        try:
+            return bytes.fromhex(peer.remote_identity_pk)
+        except ValueError:  # pragma: no cover — pinned key is always valid hex
+            return None
+
     @property
     def own_identity_seed(self) -> bytes:
         return self._own_identity_seed

@@ -24,6 +24,7 @@ from socialhome.crypto import (
 )
 from socialhome.domain.events import PairingConfirmed
 from socialhome.domain.federation import FederationEventType
+from socialhome.domain.user import UserIdentityAssertion
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.users_sync_outbound import UsersSyncOutbound
 
@@ -302,9 +303,28 @@ async def test_v25_peer_gets_user_identity_binding():
     assert entry["user_identity_public_key"] == user_kp.public_key.hex()
     assert entry["user_sig_suite"] == USER_SIG_SUITE_ED25519
     assert "user_signature" in entry
+    # The full self-verifying credential rides along: instance signature +
+    # issued_at let a relayed/cached copy be re-verified standalone.
+    assert "user_assertion_signature" in entry
+    assert "user_assertion_issued_at" in entry
     # The legacy fields are unchanged alongside the binding.
     assert entry["user_id"] == uid
     assert entry["display_name"] == "Alice"
+
+    # The emitted entry reconstructs an assertion that verifies end-to-end.
+    reconstructed = UserIdentityAssertion(
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at=entry["user_assertion_issued_at"],
+        signature=entry["user_assertion_signature"],
+        user_identity_public_key=entry["user_identity_public_key"],
+        user_pq_public_key=None,
+        user_sig_suite=entry["user_sig_suite"],
+        user_signature=entry["user_signature"],
+    )
+    verify_user_identity_assertion(reconstructed, instance_kp.public_key)
 
     reference = build_user_identity_assertion(
         instance_seed=instance_kp.private_key,
@@ -318,7 +338,6 @@ async def test_v25_peer_gets_user_identity_binding():
         user_sig_suite=USER_SIG_SUITE_ED25519,
     )
     assert entry["user_signature"] == reference.user_signature
-    verify_user_identity_assertion(reference, instance_kp.public_key)
 
 
 async def test_v24_peer_gets_legacy_shape_without_binding():
@@ -355,3 +374,5 @@ async def test_v24_peer_gets_legacy_shape_without_binding():
     assert "user_identity_public_key" not in entry
     assert "user_sig_suite" not in entry
     assert "user_signature" not in entry
+    assert "user_assertion_signature" not in entry
+    assert "user_assertion_issued_at" not in entry

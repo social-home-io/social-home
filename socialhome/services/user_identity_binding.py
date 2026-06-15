@@ -6,11 +6,25 @@ roster push on pair-confirm or the ``USER_UPDATED`` profile fan-out — the
 per-user payload may carry a *binding* that proves the user holds their own
 Ed25519 identity key, independent of the hosting instance.
 
-The binding is three fields:
+The binding is a *self-verifying portable credential* — five fields that
+let a receiver reconstruct and re-verify the whole
+:class:`~socialhome.domain.user.UserIdentityAssertion` **outside** the
+original signed federation envelope (Phase 3 resolves it on demand, Phase 4
+carries it on move-out, so it is cached and relayed standalone):
 
 * ``user_identity_public_key`` — hex Ed25519 user public key,
 * ``user_sig_suite`` — the signature suite (``"ed25519"`` in Phase 1),
-* ``user_signature`` — the base64url USER self-signature.
+* ``user_signature`` — the base64url USER self-signature,
+* ``user_assertion_signature`` — the base64url INSTANCE signature (named
+  distinctly so it can't collide with any per-user ``signature`` key),
+* ``user_assertion_issued_at`` — the ISO-8601 ``issued_at`` the instance
+  signature commits to.
+
+Carrying the instance signature + issued_at (not just the user self-sig) is
+load-bearing: the instance signature is what defends against the
+instance→user-key transplant (commit 0d64006f). A receiver that only had the
+user self-sig would lose that defense the moment the assertion travels
+detached from its envelope.
 
 They ride alongside the existing legacy per-user fields, never replacing
 them. They are emitted **only** for a peer that advertises v_25
@@ -58,11 +72,14 @@ async def user_identity_binding_fields(
     * the peer doesn't support v_25, or
     * the user has no minted identity keypair.
 
-    Otherwise the returned dict carries ``user_identity_public_key`` /
-    ``user_sig_suite`` / ``user_signature`` — the three issued-at-independent
-    binding fields lifted off a freshly built assertion. Fail-soft: any error
-    fetching the keypair or building the binding degrades to the legacy shape
-    rather than dropping the user from the snapshot.
+    Otherwise the returned dict carries the full self-verifying credential —
+    ``user_identity_public_key`` / ``user_sig_suite`` / ``user_signature``
+    (the issued-at-independent binding fields) **plus**
+    ``user_assertion_signature`` (the INSTANCE signature) and
+    ``user_assertion_issued_at`` (the assertion's ``issued_at``) — so the
+    receiver can reconstruct + verify the whole assertion standalone.
+    Fail-soft: any error fetching the keypair or building the binding degrades
+    to the legacy shape rather than dropping the user from the snapshot.
     """
     if user_repo is None:
         return {}
@@ -85,13 +102,14 @@ async def user_identity_binding_fields(
         return {}
     user_public_key, user_seed = keypair
 
+    issued_at = datetime.now(timezone.utc).isoformat()
     assertion = build_user_identity_assertion(
         instance_seed=federation_service.own_identity_seed,
         user_id=user_id,
         instance_id=federation_service.own_instance_id,
         username=username,
         display_name=display_name,
-        issued_at=datetime.now(timezone.utc).isoformat(),
+        issued_at=issued_at,
         picture_hash=picture_hash,
         user_seed=user_seed,
         user_public_key=user_public_key,
@@ -107,4 +125,11 @@ async def user_identity_binding_fields(
         "user_identity_public_key": assertion.user_identity_public_key,
         "user_sig_suite": assertion.user_sig_suite,
         "user_signature": assertion.user_signature,
+        # Full self-verifying credential: the INSTANCE signature + issued_at
+        # let the receiver reconstruct + re-verify the assertion outside the
+        # original envelope (defends the key-transplant attack on a relayed
+        # / cached copy). Named ``user_assertion_*`` to avoid colliding with
+        # any per-user ``signature`` / ``issued_at`` entry key.
+        "user_assertion_signature": assertion.signature,
+        "user_assertion_issued_at": assertion.issued_at,
     }

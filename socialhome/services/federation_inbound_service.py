@@ -63,7 +63,11 @@ from ..domain.highlight import (
     HighlightFrame,
     HighlightFrameType,
 )
-from ..domain.user import RemoteUser, UserStatus
+from ..crypto import (
+    UnsupportedUserSigSuite,
+    verify_user_identity_assertion,
+)
+from ..domain.user import RemoteUser, UserIdentityAssertion, UserStatus
 from ..infrastructure.event_bus import EventBus
 from ..infrastructure.hlc import HLC, HLC_MAX_DRIFT_MS
 from ..media.image_processor import ImageProcessor
@@ -2452,6 +2456,77 @@ class FederationInboundService:
             synced_at=_now_iso(),
         )
         await self._user_repo.upsert_remote(remote)
+
+        # Per-user identity binding (independent user identity, proto v_25).
+        # When the entry carries the self-verifying assertion fields, verify
+        # the WHOLE assertion against the sender's pinned instance key and, on
+        # success, persist the user's own identity public key. This is the
+        # transplant-resistant path: the binding can be cached/relayed and
+        # re-verified outside the original §24.11 envelope (Phase 3/4), so we
+        # check the instance signature here too — not just the user self-sig.
+        await self._store_user_identity_binding(instance_id, user_id, payload)
+
+    async def _store_user_identity_binding(
+        self,
+        instance_id: str,
+        user_id: str,
+        payload: dict,
+    ) -> None:
+        """Verify + store a per-user identity binding, fail-soft.
+
+        No-op when the binding fields are absent. Any verification failure
+        (bad signature, unknown suite, instance_id mismatch, missing sender
+        key) logs a WARNING and leaves the key unset — never raises, never
+        drops the surrounding sync, never stores an unverified key.
+        """
+        pubkey_hex = payload.get("user_identity_public_key")
+        if not pubkey_hex:
+            return  # legacy / first-revision entry — nothing to bind.
+        if self._federation_service is None:
+            return  # not attached (test stack) — can't resolve sender key.
+
+        sender_pk = await self._federation_service.peer_identity_public_key(instance_id)
+        if sender_pk is None:
+            log.warning(
+                "user-identity-binding: no pinned key for sender %s; "
+                "not storing binding for %s",
+                instance_id,
+                user_id,
+            )
+            return
+
+        assertion = UserIdentityAssertion(
+            user_id=user_id,
+            instance_id=instance_id,
+            username=str(
+                payload.get("username") or payload.get("remote_username") or ""
+            ),
+            display_name=str(payload.get("display_name") or ""),
+            issued_at=str(payload.get("user_assertion_issued_at") or ""),
+            signature=str(payload.get("user_assertion_signature") or ""),
+            user_identity_public_key=str(pubkey_hex),
+            user_pq_public_key=payload.get("user_pq_public_key"),
+            user_sig_suite=payload.get("user_sig_suite"),
+            user_signature=payload.get("user_signature"),
+        )
+        try:
+            verify_user_identity_assertion(assertion, sender_pk)
+        except (ValueError, UnsupportedUserSigSuite) as exc:
+            # ValueError covers the bind-sanity instance_id mismatch (the
+            # assertion's instance_id must equal the sender it's attributed to),
+            # bad signatures and expiry; UnsupportedUserSigSuite covers an
+            # unknown suite. All fail-soft: legacy upsert already happened.
+            log.warning(
+                "user-identity-binding: rejected binding for %s from %s: %s",
+                user_id,
+                instance_id,
+                exc,
+            )
+            return
+
+        await self._user_repo.set_remote_user_identity_key(
+            user_id, public_key_hex=str(pubkey_hex)
+        )
 
     def _post_from_payload(self, payload: dict) -> Post | None:
         post_id = str(payload.get("id") or payload.get("post_id") or "")

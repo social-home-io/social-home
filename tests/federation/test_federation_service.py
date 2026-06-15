@@ -2551,3 +2551,28 @@ async def test_resign_for_redelivery_passes_real_inbound_timestamp_and_sig():
         ed_public_key=own_kp.public_key,
         pq_public_key=None,
     )
+
+
+async def test_peer_identity_public_key_returns_pinned_bytes():
+    """``peer_identity_public_key`` decodes the pinned ``remote_identity_pk``
+    of a known peer to raw Ed25519 bytes — the key inbound handlers verify a
+    relayed user-identity binding against."""
+    own_kp = generate_identity_keypair()
+    peer_kp = generate_identity_keypair()
+    km = _make_kek_manager()
+    repo = InMemoryFederationRepo()
+    inst, _ = _make_remote_instance(km, peer_kp=peer_kp)
+    repo._instances[inst.id] = inst
+    svc = _svc_with(own_kp, repo, km)
+
+    got = await svc.peer_identity_public_key(inst.id)
+    assert got == peer_kp.public_key
+
+
+async def test_peer_identity_public_key_unknown_peer_returns_none():
+    """An unknown / unpaired peer yields ``None`` (fail-soft, no raise)."""
+    own_kp = generate_identity_keypair()
+    km = _make_kek_manager()
+    svc = _svc_with(own_kp, InMemoryFederationRepo(), km)
+    assert await svc.peer_identity_public_key("nope") is None
+    assert await svc.peer_identity_public_key("") is None

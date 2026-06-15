@@ -261,3 +261,49 @@ async def test_get_remote_by_member_roundtrip(env):
     # the index is on the composite, not either half alone.
     assert await env.user_repo.get_remote_by_member("peer-x", "brother") is None
     assert await env.user_repo.get_remote_by_member("peer-b", "sister") is None
+
+
+async def test_set_remote_user_identity_key_persists_verified_key(env):
+    """``set_remote_user_identity_key`` stores the verified per-user identity
+    public key on the ``remote_users`` row without disturbing the rest of it."""
+    from socialhome.domain.user import RemoteUser
+
+    await env.db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "peer-c",
+            "Peer C",
+            "11" * 32,
+            "k1",
+            "k2",
+            "https://peer-c.example/federation/inbox/x",
+            "local-inbox",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await env.user_repo.upsert_remote(
+        RemoteUser(
+            user_id="uid-remote-c",
+            instance_id="peer-c",
+            remote_username="carol",
+            display_name="Carol",
+        ),
+    )
+
+    await env.user_repo.set_remote_user_identity_key(
+        "uid-remote-c", public_key_hex="cd" * 32
+    )
+
+    row = await env.db.fetchone(
+        "SELECT user_identity_public_key, display_name FROM remote_users "
+        "WHERE user_id=?",
+        ("uid-remote-c",),
+    )
+    assert row["user_identity_public_key"] == "cd" * 32
+    # The rest of the row is untouched.
+    assert row["display_name"] == "Carol"

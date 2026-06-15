@@ -57,6 +57,12 @@ class AbstractUserRepo(Protocol):
         remote_username: str,
     ) -> RemoteUser | None: ...
     async def upsert_remote(self, remote: RemoteUser) -> None: ...
+    async def set_remote_user_identity_key(
+        self,
+        user_id: str,
+        *,
+        public_key_hex: str,
+    ) -> None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
     async def list_all_known_remote(self) -> list[RemoteUser]: ...
     async def get_instance_for_user(self, user_id: str) -> str | None: ...
@@ -418,6 +424,28 @@ class SqliteUserRepo:
                 remote.public_key_version,
                 remote.synced_at,
             ),
+        )
+
+    async def set_remote_user_identity_key(
+        self,
+        user_id: str,
+        *,
+        public_key_hex: str,
+    ) -> None:
+        """Persist a remote user's *verified* per-user identity public key.
+
+        Called by the inbound USERS_SYNC / USER_UPDATED handler **only after**
+        :func:`socialhome.crypto.verify_user_identity_assertion` has validated
+        the binding against the sender instance's pinned key — an unverified
+        key is never stored. Kept separate from :meth:`upsert_remote` (which
+        does not touch this column) so a legacy profile upsert can't clobber a
+        previously-verified key, and a failed verification leaves the existing
+        key intact. ``public_key_hex`` is the hex-encoded 32-byte Ed25519
+        user public key.
+        """
+        await self._db.enqueue(
+            "UPDATE remote_users SET user_identity_public_key=? WHERE user_id=?",
+            (public_key_hex, user_id),
         )
 
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]:

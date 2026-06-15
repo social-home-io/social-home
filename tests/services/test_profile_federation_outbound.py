@@ -22,6 +22,7 @@ from socialhome.crypto import (
 )
 from socialhome.domain.events import UserProfileUpdated
 from socialhome.domain.federation import FederationEventType
+from socialhome.domain.user import UserIdentityAssertion
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.services.profile_federation_outbound import (
     ProfileFederationOutbound,
@@ -229,7 +230,25 @@ async def test_v25_peer_gets_user_identity_binding():
     assert payload["user_identity_public_key"] == user_kp.public_key.hex()
     assert payload["user_sig_suite"] == USER_SIG_SUITE_ED25519
     assert "user_signature" in payload
+    # Full self-verifying credential rides along (instance sig + issued_at).
+    assert "user_assertion_signature" in payload
+    assert "user_assertion_issued_at" in payload
     assert payload["display_name"] == "Alice"
+
+    # The emitted payload reconstructs an assertion that verifies standalone.
+    reconstructed = UserIdentityAssertion(
+        user_id=uid,
+        instance_id=iid,
+        username="alice",
+        display_name="Alice",
+        issued_at=payload["user_assertion_issued_at"],
+        signature=payload["user_assertion_signature"],
+        user_identity_public_key=payload["user_identity_public_key"],
+        user_pq_public_key=None,
+        user_sig_suite=payload["user_sig_suite"],
+        user_signature=payload["user_signature"],
+    )
+    verify_user_identity_assertion(reconstructed, instance_kp.public_key)
 
     reference = build_user_identity_assertion(
         instance_seed=instance_kp.private_key,
@@ -243,7 +262,6 @@ async def test_v25_peer_gets_user_identity_binding():
         user_sig_suite=USER_SIG_SUITE_ED25519,
     )
     assert payload["user_signature"] == reference.user_signature
-    verify_user_identity_assertion(reference, instance_kp.public_key)
 
 
 async def test_v24_peer_gets_legacy_shape_without_binding():
