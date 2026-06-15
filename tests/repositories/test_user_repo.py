@@ -330,3 +330,92 @@ async def test_set_remote_user_identity_key_persists_verified_key(env):
     assert row["user_identity_public_key"] == "cd" * 32
     # The rest of the row is untouched.
     assert row["display_name"] == "Carol"
+    # No anchor supplied → the column stays NULL.
+    row2 = await env.db.fetchone(
+        "SELECT identity_anchor FROM remote_users WHERE user_id=?",
+        ("uid-remote-c",),
+    )
+    assert row2["identity_anchor"] is None
+
+
+async def test_set_remote_user_identity_key_persists_anchor(env):
+    """``set_remote_user_identity_key`` with an ``identity_anchor`` writes both
+    the pubkey and the anchor column (proto v_26)."""
+    from socialhome.domain.user import RemoteUser
+
+    await env.db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "peer-d",
+            "Peer D",
+            "22" * 32,
+            "k1",
+            "k2",
+            "https://peer-d.example/federation/inbox/x",
+            "local-inbox",
+            "confirmed",
+            "manual",
+        ),
+    )
+    await env.user_repo.upsert_remote(
+        RemoteUser(
+            user_id="uid-remote-d",
+            instance_id="peer-d",
+            remote_username="dave",
+            display_name="Dave",
+        ),
+    )
+
+    anchor = "11111111-2222-3333-4444-555555555555"
+    await env.user_repo.set_remote_user_identity_key(
+        "uid-remote-d", public_key_hex="ef" * 32, identity_anchor=anchor
+    )
+    row = await env.db.fetchone(
+        "SELECT user_identity_public_key, identity_anchor FROM remote_users "
+        "WHERE user_id=?",
+        ("uid-remote-d",),
+    )
+    assert row["user_identity_public_key"] == "ef" * 32
+    assert row["identity_anchor"] == anchor
+
+    # A later anchor-less call (a v_25 re-publish) must NOT clobber the anchor.
+    await env.user_repo.set_remote_user_identity_key(
+        "uid-remote-d", public_key_hex="ab" * 32
+    )
+    row2 = await env.db.fetchone(
+        "SELECT user_identity_public_key, identity_anchor FROM remote_users "
+        "WHERE user_id=?",
+        ("uid-remote-d",),
+    )
+    assert row2["user_identity_public_key"] == "ab" * 32
+    assert row2["identity_anchor"] == anchor
+
+
+async def test_get_user_identity_anchor_reads_column(env):
+    """``get_user_identity_anchor`` returns the local user's anchor (uuid)."""
+    from socialhome.domain.user import User
+
+    await env.user_repo.save(
+        User(
+            user_id="uid-a",
+            username="alice",
+            display_name="Alice",
+            identity_anchor="anchor-uuid-1",
+        )
+    )
+    assert await env.user_repo.get_user_identity_anchor("alice") == "anchor-uuid-1"
+
+
+async def test_get_user_identity_anchor_none_when_unknown_or_null(env):
+    """Unknown username → None; a row with a NULL anchor → None."""
+    assert await env.user_repo.get_user_identity_anchor("nobody") is None
+    await env.db.enqueue(
+        "INSERT INTO users(username, user_id, display_name, state, identity_anchor) "
+        "VALUES(?,?,?,?,?)",
+        ("bob", "u-bob", "Bob", "active", None),
+    )
+    assert await env.user_repo.get_user_identity_anchor("bob") is None

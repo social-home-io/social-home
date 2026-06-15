@@ -2495,6 +2495,15 @@ class FederationInboundService:
             )
             return
 
+        # The anchor (proto v_26) is the uuid the verifier derives user_id from
+        # when present (else username, the v_25 path). Reconstruct it onto the
+        # assertion so ``verify_user_identity_assertion`` commits to it in both
+        # the user_id-derivation check and the signed-bytes check — a forged
+        # anchor (one whose derivation doesn't match the asserted user_id, or
+        # one not committed to by the instance signature) fails verify and is
+        # rejected fail-soft below.
+        raw_anchor = payload.get("identity_anchor")
+        identity_anchor = str(raw_anchor) if raw_anchor is not None else None
         assertion = UserIdentityAssertion(
             user_id=user_id,
             instance_id=instance_id,
@@ -2508,6 +2517,7 @@ class FederationInboundService:
             user_pq_public_key=payload.get("user_pq_public_key"),
             user_sig_suite=payload.get("user_sig_suite"),
             user_signature=payload.get("user_signature"),
+            identity_anchor=identity_anchor,
         )
         try:
             verify_user_identity_assertion(assertion, sender_pk)
@@ -2534,7 +2544,9 @@ class FederationInboundService:
         # standalone) MUST add a stored-issued_at monotonic guard before the
         # UPDATE. See docs/protocol/capabilities.md v_25 + the design spec.
         await self._user_repo.set_remote_user_identity_key(
-            user_id, public_key_hex=str(pubkey_hex)
+            user_id,
+            public_key_hex=str(pubkey_hex),
+            identity_anchor=identity_anchor,
         )
 
     def _post_from_payload(self, payload: dict) -> Post | None:

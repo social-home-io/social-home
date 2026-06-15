@@ -1337,9 +1337,17 @@ async def _seed_peer(db, instance_id: str, identity_pk_hex: str) -> None:
     )
 
 
-def _binding_entry(*, instance_kp, user_kp, username="alice", display="Alice"):
+def _binding_entry(
+    *, instance_kp, user_kp, username="alice", display="Alice", identity_anchor=None
+):
     """Build a USERS_SYNC per-user entry carrying the full self-verifying
-    identity binding, exactly as the outbound helper emits it."""
+    identity binding, exactly as the outbound helper emits it.
+
+    When ``identity_anchor`` is supplied (a uuid-anchored user, proto v_26),
+    ``user_id`` derives from the anchor (not the username), the anchor is
+    baked into both signatures, and the entry carries the ``identity_anchor``
+    wire field — matching the v_26 outbound shape.
+    """
     from datetime import datetime, timezone
 
     from socialhome.crypto import (
@@ -1350,7 +1358,8 @@ def _binding_entry(*, instance_kp, user_kp, username="alice", display="Alice"):
     )
 
     iid = derive_instance_id(instance_kp.public_key)
-    uid = derive_user_id(instance_kp.public_key, username)
+    derivation_input = identity_anchor if identity_anchor is not None else username
+    uid = derive_user_id(instance_kp.public_key, derivation_input)
     assertion = build_user_identity_assertion(
         instance_seed=instance_kp.private_key,
         user_id=uid,
@@ -1361,21 +1370,21 @@ def _binding_entry(*, instance_kp, user_kp, username="alice", display="Alice"):
         user_seed=user_kp.private_key,
         user_public_key=user_kp.public_key,
         user_sig_suite=USER_SIG_SUITE_ED25519,
+        identity_anchor=identity_anchor,
     )
-    return (
-        iid,
-        uid,
-        {
-            "user_id": uid,
-            "username": username,
-            "display_name": display,
-            "user_identity_public_key": assertion.user_identity_public_key,
-            "user_sig_suite": assertion.user_sig_suite,
-            "user_signature": assertion.user_signature,
-            "user_assertion_signature": assertion.signature,
-            "user_assertion_issued_at": assertion.issued_at,
-        },
-    )
+    entry = {
+        "user_id": uid,
+        "username": username,
+        "display_name": display,
+        "user_identity_public_key": assertion.user_identity_public_key,
+        "user_sig_suite": assertion.user_sig_suite,
+        "user_signature": assertion.user_signature,
+        "user_assertion_signature": assertion.signature,
+        "user_assertion_issued_at": assertion.issued_at,
+    }
+    if identity_anchor is not None:
+        entry["identity_anchor"] = identity_anchor
+    return (iid, uid, entry)
 
 
 async def test_users_sync_stores_verified_identity_binding(db, bus):
@@ -1404,6 +1413,162 @@ async def test_users_sync_stores_verified_identity_binding(db, bus):
         (uid,),
     )
     assert row["user_identity_public_key"] == user_kp.public_key.hex()
+
+
+async def test_users_sync_stores_identity_anchor_for_anchored_user(db, bus):
+    """A v_26 binding carrying ``identity_anchor`` (for a uuid-anchored user)
+    verifies against the sender's pinned key and persists BOTH the pubkey and
+    the anchor on ``remote_users``."""
+    from socialhome.crypto import generate_identity_keypair
+
+    anchor = "11111111-2222-3333-4444-555555555555"
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(
+        instance_kp=instance_kp, user_kp=user_kp, identity_anchor=anchor
+    )
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+
+    row = await db.fetchone(
+        "SELECT user_identity_public_key, identity_anchor FROM remote_users "
+        "WHERE user_id=?",
+        (uid,),
+    )
+    assert row["user_identity_public_key"] == user_kp.public_key.hex()
+    assert row["identity_anchor"] == anchor
+
+
+async def test_users_sync_forged_anchor_not_stored_but_upserted(db, bus, caplog):
+    """A forged anchor — one whose derivation doesn't match the asserted
+    user_id — fails verify and is rejected fail-soft: no pubkey/anchor stored,
+    but the legacy upsert still lands."""
+    import logging
+
+    from socialhome.crypto import generate_identity_keypair
+
+    real_anchor = "11111111-2222-3333-4444-555555555555"
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid, uid, entry = _binding_entry(
+        instance_kp=instance_kp, user_kp=user_kp, identity_anchor=real_anchor
+    )
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+    # Tamper: swap in a DIFFERENT anchor. user_id still derives from the real
+    # anchor, so the verifier's user_id == derive(pk, forged_anchor) check fails
+    # (and the instance signature committed to the real anchor anyway).
+    entry["identity_anchor"] = "99999999-8888-7777-6666-555555555555"
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    with caplog.at_level(logging.WARNING):
+        await service._on_users_sync(
+            _event(
+                FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid
+            )
+        )
+
+    row = await db.fetchone(
+        "SELECT user_identity_public_key, identity_anchor, display_name "
+        "FROM remote_users WHERE user_id=?",
+        (uid,),
+    )
+    # Legacy upsert still happened; the unverified key + anchor were NOT stored.
+    assert row is not None
+    assert row["display_name"] == "Alice"
+    assert row["user_identity_public_key"] is None
+    assert row["identity_anchor"] is None
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+async def test_users_sync_anchor_roundtrip_outbound_to_inbound(db, bus):
+    """End-to-end: the v_26 outbound helper's exact entry shape (with anchor),
+    fed to the inbound handler, lands a verified pubkey + anchor."""
+    from socialhome.crypto import (
+        derive_instance_id,
+        derive_user_id,
+        generate_identity_keypair,
+    )
+    from socialhome.services.user_identity_binding import (
+        user_identity_binding_fields,
+    )
+
+    anchor = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    uid = derive_user_id(instance_kp.public_key, anchor)
+    await _seed_peer(db, iid, instance_kp.public_key.hex())
+
+    class _OutFed:
+        own_identity_seed = instance_kp.private_key
+        own_instance_id = iid
+
+        async def peer_supports(self, instance_id, *, min_version):
+            return True  # v_26+ peer: supports both binding + anchor
+
+    class _OutUserRepo:
+        async def get_user_identity_keypair(self, username):
+            return (user_kp.public_key, user_kp.private_key)
+
+        async def get_user_identity_anchor(self, username):
+            return anchor
+
+    binding = await user_identity_binding_fields(
+        federation_service=_OutFed(),
+        user_repo=_OutUserRepo(),
+        peer_instance_id="anybody",
+        user_id=uid,
+        username="alice",
+        display_name="Alice",
+    )
+    assert binding["identity_anchor"] == anchor
+    entry = {
+        "user_id": uid,
+        "username": "alice",
+        "display_name": "Alice",
+        **binding,
+    }
+
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    service._federation_service = _BindingFakeFederation({iid: instance_kp.public_key})
+
+    await service._on_users_sync(
+        _event(FederationEventType.USERS_SYNC, {"users": [entry]}, from_instance=iid)
+    )
+
+    row = await db.fetchone(
+        "SELECT user_identity_public_key, identity_anchor FROM remote_users "
+        "WHERE user_id=?",
+        (uid,),
+    )
+    assert row["user_identity_public_key"] == user_kp.public_key.hex()
+    assert row["identity_anchor"] == anchor
 
 
 async def test_users_sync_tampered_user_signature_not_stored_but_upserted(

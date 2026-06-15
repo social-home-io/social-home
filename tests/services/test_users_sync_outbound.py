@@ -51,6 +51,12 @@ class _FakeFederationService:
         return self._own_instance_id
 
     async def peer_supports(self, instance_id: str, *, min_version: int) -> bool:
+        # These fakes model a v_25 peer: it supports the binding (v_25) but NOT
+        # the v_26 anchor, so the anchor gate must answer False.
+        from socialhome.domain.federation_capabilities import FederationCapability
+
+        if min_version >= FederationCapability.MIN_FOR_IDENTITY_ANCHOR:
+            return False
         return self._supports_v25
 
     async def send_event(self, *, to_instance_id, event_type, payload):
@@ -88,6 +94,9 @@ class _FakeUserRepo:
 
     async def get_user_identity_keypair(self, username: str):
         return self._keypairs.get(username)
+
+    async def get_user_identity_anchor(self, username: str):
+        return None
 
 
 class _FakePictureRepo:
