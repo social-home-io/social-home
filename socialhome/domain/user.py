@@ -259,6 +259,16 @@ class UserIdentityAssertion:
     user_sig_suite: str | None = None  # e.g. "ed25519"
     user_signature: str | None = None  # base64url USER self-signature
 
+    # Immutable per-user anchor (uuid4 hex for new users, username for legacy
+    # rows) that ``user_id`` derives from — ``derive_user_id(instance_pk,
+    # identity_anchor)``. When present it is the derivation input the verifier
+    # checks ``user_id`` against (else it falls back to ``username`` for legacy
+    # compat) and BOTH signatures (instance + user self-sig) commit to it under
+    # the ``identity-anchor`` domain tag, so a swapped anchor breaks the sigs,
+    # not just the derivation check. Defaults ``None`` so legacy / first-
+    # revision payloads that omit it still parse with byte-identical signatures.
+    identity_anchor: str | None = None
+
 
 @dataclass(slots=True, frozen=True)
 class DisplayableUser:

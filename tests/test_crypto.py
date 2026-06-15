@@ -583,3 +583,148 @@ def test_dual_assertion_missing_suite_defaults_to_ed25519():
     # first-revision sender simply omits the field on the wire.
     first_rev = dataclasses.replace(a, user_sig_suite=None)
     verify_user_identity_assertion(first_rev, instance_pubkey)
+
+
+# ─── identity_anchor binding (user_id derives from anchor, not username) ────
+
+
+def test_anchor_derived_user_id_verifies():
+    """When an assertion carries an ``identity_anchor`` distinct from the
+    username, ``user_id`` derives from the anchor (not the username) and the
+    assertion verifies."""
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    anchor = "deadbeef" * 4  # opaque uuid-like value, != username
+    uid = derive_user_id(instance_kp.public_key, anchor)
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="loginname",
+        display_name="Login Name",
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+    assert a.identity_anchor == anchor
+    # Does not raise -> user_id derives from the anchor and sigs cover it.
+    verify_user_identity_assertion(a, instance_kp.public_key)
+    # The anchor is genuinely the derivation input, not the username.
+    assert uid != derive_user_id(instance_kp.public_key, "loginname")
+
+
+def test_forged_anchor_rejected():
+    """Swapping in a different ``identity_anchor`` breaks verification: the
+    user_id no longer derives from it AND the signatures no longer match."""
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    anchor = "deadbeef" * 4
+    uid = derive_user_id(instance_kp.public_key, anchor)
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="loginname",
+        display_name="Login Name",
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+    bad = dataclasses.replace(a, identity_anchor="cafebabe" * 4)
+    with pytest.raises(ValueError):
+        verify_user_identity_assertion(bad, instance_kp.public_key)
+
+
+def test_legacy_no_anchor_falls_back_to_username():
+    """An assertion with no binding and no anchor verifies via the legacy
+    username derivation path unchanged."""
+    kp = generate_identity_keypair()
+    iid = derive_instance_id(kp.public_key)
+    uid = derive_user_id(kp.public_key, "pascal")
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="pascal",
+        display_name="Pascal",
+        issued_at=issued,
+    )
+    assert a.identity_anchor is None
+    verify_user_identity_assertion(a, kp.public_key)
+
+
+def test_anchored_binding_roundtrip():
+    """An anchored, binding-bearing assertion sets identity_anchor and BOTH
+    signatures cover the anchor — tampering the anchor breaks the signatures
+    (not just the derivation check)."""
+    instance_kp = generate_identity_keypair()
+    user_kp = generate_identity_keypair()
+    iid = derive_instance_id(instance_kp.public_key)
+    anchor = "deadbeef" * 4
+    uid = derive_user_id(instance_kp.public_key, anchor)
+    issued = datetime.now(timezone.utc).isoformat()
+    a = build_user_identity_assertion(
+        instance_seed=instance_kp.private_key,
+        user_id=uid,
+        instance_id=iid,
+        username="loginname",
+        display_name="Login Name",
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+    assert a.identity_anchor == anchor
+    assert a.user_signature is not None
+
+    # The INSTANCE signature covers the anchor: keep the user_id matching the
+    # tampered anchor's derivation so the instance-sig check (not the user_id
+    # derivation check) is what rejects it.
+    forged_anchor = "cafebabe" * 4
+    forged_uid = derive_user_id(instance_kp.public_key, forged_anchor)
+    instance_tampered = dataclasses.replace(
+        a, identity_anchor=forged_anchor, user_id=forged_uid
+    )
+    with pytest.raises(ValueError, match="signature"):
+        verify_user_identity_assertion(instance_tampered, instance_kp.public_key)
+
+    # The USER self-signature also covers the anchor. Re-sign the instance leg
+    # for the forged anchor so the instance sig passes, then prove the user
+    # self-sig is what breaks.
+    body_for_user = user_identity_signed_bytes(
+        user_id=forged_uid,
+        instance_id=iid,
+        username="loginname",
+        user_public_key=user_kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+    )
+    # NOTE: body_for_user does NOT include the anchor here on purpose — it is
+    # rebuilt by verify from the (forged) anchor, so this stale self-sig fails.
+    stale_self_sig = b64url_encode(sign_user_self(user_kp.private_key, body_for_user))
+    reinstance_sig = sign_user_assertion(
+        instance_kp.private_key,
+        user_id=forged_uid,
+        instance_id=iid,
+        username="loginname",
+        display_name="Login Name",
+        issued_at=issued,
+        user_identity_public_key=user_kp.public_key,
+        user_sig_suite=USER_SIG_SUITE_ED25519,
+        identity_anchor=forged_anchor,
+    )
+    user_tampered = dataclasses.replace(
+        a,
+        identity_anchor=forged_anchor,
+        user_id=forged_uid,
+        signature=reinstance_sig,
+        user_signature=stale_self_sig,
+    )
+    with pytest.raises(ValueError, match="self-signature"):
+        verify_user_identity_assertion(user_tampered, instance_kp.public_key)
