@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
 from ..db import AsyncDatabase
+from ..domain.move_errors import StaleMoveLink
 from ..domain.user import RemoteUser, User, UserStatus
 from .base import bool_col, row_to_dict, rows_to_dicts
 
@@ -79,6 +80,19 @@ class AbstractUserRepo(Protocol):
         *,
         at: str | None = None,
     ) -> None: ...
+    async def record_user_move(
+        self,
+        *,
+        old_user_id: str,
+        new_user_id: str,
+        new_instance_id: str,
+        issued_at: str,
+        move_link_json: str,
+    ) -> None: ...
+    async def get_move_link(self, old_user_id: str) -> str | None: ...
+    async def resolve_current_identity(
+        self, user_id: str
+    ) -> tuple[str, str] | None: ...
 
     # API tokens ----------------------------------------------------------
     async def list_api_tokens(self, user_id: str) -> list[dict]: ...
@@ -651,6 +665,86 @@ class SqliteUserRepo:
             (user_id,),
         )
         return row["instance_id"] if row else None
+
+    # ── Move-out redirect (MO-1) ────────────────────────────────────────
+
+    async def record_user_move(
+        self,
+        *,
+        old_user_id: str,
+        new_user_id: str,
+        new_instance_id: str,
+        issued_at: str,
+        move_link_json: str,
+    ) -> None:
+        """Record a move-out redirect on the moved user's OLD ``remote_users``
+        row, pointing at their NEW household-scoped identity.
+
+        Monotonic on ``issued_at`` (a tz-aware ISO-8601 ``…+00:00`` string,
+        which sorts lexically): if a redirect is already on file whose
+        ``move_issued_at`` is ``>=`` the incoming one, the call raises
+        :class:`StaleMoveLink` rather than overwriting newer state — so a
+        replayed older move-link cannot resurrect a stale identity. The guard
+        is keyed by the stable per-user row (``old_user_id`` is the immutable
+        pubkey-derived id); the caller is responsible for having verified the
+        link's signature against that user's identity key before recording.
+        """
+        existing = await self._db.fetchone(
+            "SELECT move_issued_at FROM remote_users WHERE user_id=?",
+            (old_user_id,),
+        )
+        if existing is not None:
+            prior = existing["move_issued_at"]
+            if prior is not None and issued_at <= prior:
+                raise StaleMoveLink(
+                    f"move link for {old_user_id} issued_at {issued_at!r} "
+                    f"is not newer than recorded {prior!r}"
+                )
+        await self._db.enqueue(
+            "UPDATE remote_users SET moved_to_user_id=?, moved_to_instance_id=?, "
+            "move_issued_at=?, move_link=? WHERE user_id=?",
+            (new_user_id, new_instance_id, issued_at, move_link_json, old_user_id),
+        )
+
+    async def get_move_link(self, old_user_id: str) -> str | None:
+        """Return the stored ``move_link`` JSON for a moved user, or ``None``
+        when the row is unknown or carries no recorded move."""
+        row = await self._db.fetchone(
+            "SELECT move_link FROM remote_users WHERE user_id=?",
+            (old_user_id,),
+        )
+        if row is None:
+            return None
+        link = row["move_link"]
+        return str(link) if link is not None else None
+
+    async def resolve_current_identity(self, user_id: str) -> tuple[str, str] | None:
+        """Follow the move-redirect chain to the current identity.
+
+        Walks ``moved_to_user_id`` from ``user_id`` to the tip, returning the
+        ``(current_user_id, current_instance_id)`` of the row that has no
+        further redirect. An unmoved row resolves to itself. Returns ``None``
+        when the starting ``user_id`` is unknown, or when a redirect cycle is
+        detected (defended with a ``seen`` set so a malformed chain can't
+        loop forever).
+        """
+        seen: set[str] = set()
+        current = user_id
+        while True:
+            if current in seen:
+                return None
+            seen.add(current)
+            row = await self._db.fetchone(
+                "SELECT instance_id, moved_to_user_id FROM remote_users "
+                "WHERE user_id=?",
+                (current,),
+            )
+            if row is None:
+                return None
+            moved_to = row["moved_to_user_id"]
+            if moved_to is None:
+                return (current, row["instance_id"])
+            current = moved_to
 
     # ── API tokens ──────────────────────────────────────────────────────
 

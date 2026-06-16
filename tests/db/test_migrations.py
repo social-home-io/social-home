@@ -701,6 +701,29 @@ def test_0043_case_colliding_usernames_do_not_abort(tmp_path):
         conn.close()
 
 
+@pytest.mark.asyncio
+async def test_0044_move_redirect_columns(tmp_path):
+    """Migration 0044 adds the move-out redirect columns to remote_users
+    (MO-1). Four additive NULL-defaulted columns, no backfill."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+
+    remote_users_cols = {
+        r["name"] for r in await db.fetchall("PRAGMA table_info(remote_users)")
+    }
+    required = {
+        "moved_to_user_id",
+        "moved_to_instance_id",
+        "move_issued_at",
+        "move_link",
+    }
+    assert required <= remote_users_cols, (
+        f"Missing move-redirect columns in remote_users: {required - remote_users_cols}"
+    )
+
+    await db.shutdown()
+
+
 def _ensure_schema_version_for_test(conn: sqlite3.Connection) -> None:
     """Create the schema_version stamp table the runner relies on (the
     incremental backfill test applies migrations without run_migrations)."""
