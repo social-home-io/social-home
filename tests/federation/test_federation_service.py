@@ -8,7 +8,7 @@ from __future__ import annotations
 import dataclasses
 import uuid
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -20,6 +20,7 @@ from socialhome.crypto import (
     generate_x25519_keypair,
 )
 from socialhome.domain.federation import (
+    DeliveryResult,
     FederationEventType,
     PairingSession,
     PairingStatus,
@@ -1322,6 +1323,111 @@ async def test_send_with_mesh_fallback_returns_failure_when_mesh_not_attached():
 
     assert result.ok is False
     assert result.error == "not_confirmed"
+
+
+# ─── begin_mesh_catchup_sync ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_begin_mesh_catchup_sync_registers_session_and_sends_for_mesh_host():
+    """A non-confirmed (mesh) host: register a requester HTTPS receive
+    session and ship SPACE_SYNC_BEGIN(prefer_direct=False) via mesh fallback."""
+    svc, _ = _make_service()
+    sync_manager = MagicMock()
+    sync_manager.register_requester_https_session = MagicMock(return_value=True)
+    sync_manager.close_session = MagicMock()
+    svc.attach_sync_manager(sync_manager)
+
+    send_mock = AsyncMock(
+        return_value=DeliveryResult(instance_id="host-1", ok=True),
+    )
+    with (
+        patch.object(
+            FederationService, "is_confirmed_peer", AsyncMock(return_value=False)
+        ),
+        patch.object(FederationService, "send_with_mesh_fallback", send_mock),
+    ):
+        await svc.begin_mesh_catchup_sync(space_id="sp-1", host_instance_id="host-1")
+
+    # Registered a requester-side receive session for this sync.
+    sync_manager.register_requester_https_session.assert_called_once()
+    reg_kwargs = sync_manager.register_requester_https_session.call_args.kwargs
+    assert reg_kwargs["space_id"] == "sp-1"
+    assert reg_kwargs["requester_instance_id"] == svc._own_instance_id
+    assert reg_kwargs["provider_instance_id"] == "host-1"
+    sync_id = reg_kwargs["sync_id"]
+    assert sync_id
+
+    # Sent SPACE_SYNC_BEGIN with prefer_direct=False via mesh fallback.
+    send_mock.assert_awaited_once()
+    send_kwargs = send_mock.call_args.kwargs
+    assert send_kwargs["to_instance_id"] == "host-1"
+    assert send_kwargs["event_type"] is FederationEventType.SPACE_SYNC_BEGIN
+    assert send_kwargs["space_id"] == "sp-1"
+    assert send_kwargs["payload"]["sync_id"] == sync_id
+    assert send_kwargs["payload"]["space_id"] == "sp-1"
+    assert send_kwargs["payload"]["sync_mode"] == "initial"
+    assert send_kwargs["payload"]["prefer_direct"] is False
+    # Success → session NOT closed (the chunk replies still need it).
+    sync_manager.close_session.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_begin_mesh_catchup_sync_noop_for_confirmed_host():
+    """A CONFIRMED host is a no-op — the SpaceSyncScheduler already syncs it."""
+    svc, _ = _make_service()
+    sync_manager = MagicMock()
+    sync_manager.register_requester_https_session = MagicMock(return_value=True)
+    svc.attach_sync_manager(sync_manager)
+
+    send_mock = AsyncMock()
+    with (
+        patch.object(
+            FederationService, "is_confirmed_peer", AsyncMock(return_value=True)
+        ),
+        patch.object(FederationService, "send_with_mesh_fallback", send_mock),
+    ):
+        await svc.begin_mesh_catchup_sync(space_id="sp-1", host_instance_id="host-1")
+
+    sync_manager.register_requester_https_session.assert_not_called()
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_begin_mesh_catchup_sync_closes_session_on_send_failure():
+    """If the mesh send fails, the registered receive session is closed
+    (no dangling session leak) and no exception propagates."""
+    svc, _ = _make_service()
+    sync_manager = MagicMock()
+    sync_manager.register_requester_https_session = MagicMock(return_value=True)
+    sync_manager.close_session = MagicMock()
+    svc.attach_sync_manager(sync_manager)
+
+    send_mock = AsyncMock(
+        return_value=DeliveryResult(instance_id="host-1", ok=False, error="no_route"),
+    )
+    with (
+        patch.object(
+            FederationService, "is_confirmed_peer", AsyncMock(return_value=False)
+        ),
+        patch.object(FederationService, "send_with_mesh_fallback", send_mock),
+    ):
+        await svc.begin_mesh_catchup_sync(space_id="sp-1", host_instance_id="host-1")
+
+    sync_id = sync_manager.register_requester_https_session.call_args.kwargs["sync_id"]
+    sync_manager.close_session.assert_called_once_with(sync_id)
+
+
+@pytest.mark.asyncio
+async def test_begin_mesh_catchup_sync_noop_when_sync_manager_unwired():
+    """No sync manager attached → no-op, no raise."""
+    svc, _ = _make_service()
+    assert svc._sync_manager is None
+    send_mock = AsyncMock()
+    with patch.object(FederationService, "send_with_mesh_fallback", send_mock):
+        await svc.begin_mesh_catchup_sync(space_id="sp-1", host_instance_id="host-1")
+
+    send_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

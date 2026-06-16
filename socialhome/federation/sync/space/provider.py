@@ -334,7 +334,13 @@ class SpaceSyncService:
                 raise RuntimeError(
                     "HTTPS-mode SpaceSyncService requires attach_federation",
                 )
-            await self._federation.send_event(
+            # A member that joined over a MESH route isn't a confirmed
+            # direct peer, so a bare ``send_event`` can't reach it — the
+            # chunks must ride ``SPACE_ROUTED``. ``send_with_mesh_fallback``
+            # picks the direct path internally for a confirmed peer and
+            # discovers a routed path otherwise. Fire-and-forget per chunk,
+            # matching the prior call.
+            await self._federation.send_with_mesh_fallback(
                 to_instance_id=session.requester_instance_id,
                 event_type=FederationEventType.SPACE_SYNC_CHUNK,
                 payload={

@@ -1041,6 +1041,63 @@ class FederationService:
             )
         return DeliveryResult(instance_id=to_instance_id, ok=True)
 
+    async def begin_mesh_catchup_sync(
+        self,
+        *,
+        space_id: str,
+        host_instance_id: str,
+    ) -> None:
+        """Initiate a §25.6 catch-up sync FROM a mesh-only host.
+
+        For a space whose host is NOT a confirmed direct peer (we joined over a
+        relay), the normal SpaceSyncScheduler never triggers (it only syncs with
+        CONFIRMED peers). This kicks the pull-sync explicitly: register a
+        requester-side HTTPS receive session (so the routed SPACE_SYNC_CHUNK
+        replies aren't dropped), then send SPACE_SYNC_BEGIN(prefer_direct=False)
+        to the host via mesh fallback. No-op for a confirmed host (the scheduler
+        already covers it) or when the sync machinery isn't wired. Fail-soft.
+        """
+        try:
+            if self._sync_manager is None:
+                return
+            if await self.is_confirmed_peer(host_instance_id):
+                return
+            sync_id = uuid.uuid4().hex
+            self._sync_manager.register_requester_https_session(
+                sync_id=sync_id,
+                space_id=space_id,
+                requester_instance_id=self._own_instance_id,
+                provider_instance_id=host_instance_id,
+            )
+            result = await self.send_with_mesh_fallback(
+                to_instance_id=host_instance_id,
+                event_type=FederationEventType.SPACE_SYNC_BEGIN,
+                payload={
+                    "sync_id": sync_id,
+                    "space_id": space_id,
+                    "sync_mode": "initial",
+                    "prefer_direct": False,
+                },
+                space_id=space_id,
+            )
+            if not result.ok:
+                log.warning(
+                    "mesh catch-up sync to host %s for space %s failed: %s",
+                    host_instance_id,
+                    space_id,
+                    result.error,
+                )
+                # Don't leak a dangling receive-session for a sync that never
+                # left the building.
+                self._sync_manager.close_session(sync_id)
+        except Exception as exc:  # fail-soft — must not break invite-accept
+            log.warning(
+                "begin_mesh_catchup_sync for space %s host %s errored: %s",
+                space_id,
+                host_instance_id,
+                exc,
+            )
+
     async def send_media_chunk(
         self,
         *,
@@ -1901,7 +1958,16 @@ class FederationService:
             )
             return
 
-        if decision.accepted and not bool(payload.get("prefer_direct")):
+        # A requester reachable only via the mesh (not a CONFIRMED direct
+        # peer) cannot complete the WebRTC handshake — ICE can't traverse a
+        # relay — so force HTTPS/event-chunk mode regardless of what
+        # prefer_direct says. The RTC offer below would otherwise go out over
+        # direct send_event and never reach a mesh-only peer.
+        requester_is_mesh = not await self.is_confirmed_peer(event.from_instance)
+
+        if decision.accepted and (
+            requester_is_mesh or not bool(payload.get("prefer_direct"))
+        ):
             # Relay-mode sync (Part C). ``prefer_direct=False`` arrives
             # either because the requester hit a 15 s ICE timeout and
             # called ``trigger_relay_sync``, or because they know
@@ -1925,7 +1991,11 @@ class FederationService:
                     )
             return
 
-        if decision.accepted and bool(payload.get("prefer_direct")):
+        if (
+            decision.accepted
+            and not requester_is_mesh
+            and bool(payload.get("prefer_direct"))
+        ):
             # Build SDP offer, send SPACE_SYNC_OFFER back over relay.
             record = self._sync_manager.get_session(sync_id)
             if record is not None and record.rtc is not None:
