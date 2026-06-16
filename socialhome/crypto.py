@@ -353,6 +353,14 @@ def move_link_release_signed_bytes(
 # ─── Move-out link build + verify (move-out link) ──────────────────────────
 
 
+# A move-link is a DURABLE fact: its security comes from the dual signatures +
+# destination pinning + the monotonic issued_at guard, NOT from freshness. When
+# the caller opts out of age-checking (``max_age is None``), we still need the
+# embedded assertion's signature/binding checks to run, so we pass this
+# effectively-infinite window so expiry never trips.
+_DURABLE_MAX_AGE = timedelta(days=365_000)
+
+
 class MoveLinkError(ValueError):
     """Base for every move-out link verification failure."""
 
@@ -451,7 +459,7 @@ def verify_move_link(
     old_home_pinned_pk: bytes,
     stored_old_user_pubkey: bytes,
     now: datetime | None = None,
-    max_age: timedelta = timedelta(days=365),
+    max_age: timedelta | None = None,
 ) -> None:
     """Verify a move-out link under DUAL CONSENT + both P-bindings.
 
@@ -459,6 +467,12 @@ def verify_move_link(
     returns ``None`` on success. ``old_home_pinned_pk`` is the old home's
     instance pubkey the receiver already pins; ``stored_old_user_pubkey`` is the
     portable ``P`` the receiver already stored for ``old_user_id``.
+
+    Freshness is caller-controlled: a move-link is a DURABLE record, so the
+    default ``max_age=None`` performs NO age rejection anywhere (signatures and
+    all bindings still verify — only the age gates are skipped). Pass a
+    ``timedelta`` to bound freshness; that same bound is propagated to the
+    embedded new-home assertion check so the caller's policy reaches every leg.
     """
     # 1. Suite — no default fallback (downgrade protection).
     validate_move_link_suite(link.suite)
@@ -490,7 +504,10 @@ def verify_move_link(
             link.new_home_assertion,
             new_inst_pk,
             now=now,
-            max_age=timedelta(days=365),
+            # Propagate the caller's freshness policy: when age-checking is off
+            # (max_age is None), use a sentinel-large window so the assertion's
+            # signature/binding checks still run but expiry never trips.
+            max_age=_DURABLE_MAX_AGE if max_age is None else max_age,
         )
     except (ValueError, UnsupportedUserSigSuite) as exc:
         raise MoveLinkBindingInvalid(f"new-home assertion invalid: {exc}") from exc
@@ -534,13 +551,15 @@ def verify_move_link(
     ):
         raise MoveLinkReleaseSigInvalid("move-link release consent signature invalid")
 
-    # 8. Freshness — reject a link older than max_age (one-directional: a
-    #    future-dated link is fine, the new-home assertion gate above already
-    #    bounds clock skew).
-    issued = parse_iso8601_strict(link.issued_at)
-    current = now if now is not None else datetime.now(timezone.utc)
-    if (current - issued).total_seconds() > max_age.total_seconds():
-        raise MoveLinkError("move-link is older than max_age")
+    # 8. Freshness — caller-controlled. A move-link is a durable record, so when
+    #    max_age is None (the default) we do NOT age-check at all. Otherwise
+    #    reject a link older than max_age (one-directional: a future-dated link
+    #    is fine, the new-home assertion gate above already bounds clock skew).
+    if max_age is not None:
+        issued = parse_iso8601_strict(link.issued_at)
+        current = now if now is not None else datetime.now(timezone.utc)
+        if (current - issued).total_seconds() > max_age.total_seconds():
+            raise MoveLinkError("move-link is older than max_age")
 
 
 # ─── UserIdentityAssertion encoding (§4.1.4) ──────────────────────────────

@@ -961,11 +961,16 @@ def test_verify_move_link_unknown_suite_rejected():
         )
 
 
-def test_verify_move_link_stale_link_rejected():
-    """A link older than max_age is rejected on the freshness gate."""
+def test_verify_move_link_freshness_is_caller_controlled():
+    """A move-link is a DURABLE record: an ~800-day-old but otherwise valid link
+    verifies SUCCESSFULLY under the default ``max_age=None`` (the resolve-backstop
+    case), and the SAME link is REJECTED when the caller passes a tight
+    ``max_age`` — proving the bound now reaches both the link's own freshness
+    gate AND the embedded new-home assertion check."""
     s = _build_move_scenario()
     way_back = (datetime.now(timezone.utc) - timedelta(days=800)).isoformat()
-    # Rebuild a fully-consistent but old link so it fails ONLY on freshness.
+    # Build a fully-consistent but OLD link (assertion + link share the old date)
+    # so it fails ONLY on freshness when freshness is actually enforced.
     user_kp = s["user_kp"]
     old_home_kp = s["old_home_kp"]
     new_home_kp = s["new_home_kp"]
@@ -974,7 +979,7 @@ def test_verify_move_link_stale_link_rejected():
     new_user_id = derive_user_id(new_home_kp.public_key, anchor)
     old_instance_id = derive_instance_id(old_home_kp.public_key)
     old_user_id = derive_user_id(old_home_kp.public_key, anchor)
-    stale_assertion = build_user_identity_assertion(
+    old_assertion = build_user_identity_assertion(
         instance_seed=new_home_kp.private_key,
         user_id=new_user_id,
         instance_id=new_instance_id,
@@ -985,19 +990,31 @@ def test_verify_move_link_stale_link_rejected():
         user_public_key=user_kp.public_key,
         identity_anchor=anchor,
     )
-    stale_link = build_move_link(
+    old_link = build_move_link(
         user_seed=user_kp.private_key,
         user_public_key=user_kp.public_key,
         old_home_instance_seed=old_home_kp.private_key,
         old_user_id=old_user_id,
         old_instance_id=old_instance_id,
         new_instance_public_key=new_home_kp.public_key,
-        new_home_assertion=stale_assertion,
+        new_home_assertion=old_assertion,
         issued_at=way_back,
     )
+
+    # (a) Durable record: default max_age=None does NOT age-check anywhere — the
+    #     signatures + bindings still verify, only the age gates are skipped.
+    verify_move_link(
+        old_link,
+        old_home_pinned_pk=old_home_kp.public_key,
+        stored_old_user_pubkey=user_kp.public_key,
+    )
+
+    # (b) Caller can still bound freshness: a tight max_age rejects the SAME link,
+    #     proving the bound reaches the embedded assertion check too.
     with pytest.raises(MoveLinkError):
         verify_move_link(
-            stale_link,
+            old_link,
             old_home_pinned_pk=old_home_kp.public_key,
             stored_old_user_pubkey=user_kp.public_key,
+            max_age=timedelta(days=30),
         )
