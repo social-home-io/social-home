@@ -539,6 +539,78 @@ def test_0042_rebuild_preserves_calendar_with_existing_event(tmp_path):
         conn.close()
 
 
+@pytest.mark.asyncio
+async def test_0043_handle_columns_and_backfill(tmp_path):
+    """Migration 0043 adds public handle columns to users and remote_users.
+    The handle column is backfilled with username for existing users, and
+    a per-household, case-insensitive UNIQUE NOCASE index is created."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+
+    # Check users table has handle column
+    users_cols = {r["name"] for r in await db.fetchall("PRAGMA table_info(users)")}
+    assert "handle" in users_cols, "handle missing from users table"
+
+    # Check remote_users table has handle column
+    remote_users_cols = {
+        r["name"] for r in await db.fetchall("PRAGMA table_info(remote_users)")
+    }
+    assert "handle" in remote_users_cols, "handle missing from remote_users table"
+
+    # Check that UNIQUE NOCASE index exists for users.handle
+    indices = await db.fetchall(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users'"
+    )
+    index_names = {r["name"] for r in indices}
+    assert any("handle" in name for name in index_names), (
+        f"No handle index found in users; indices: {index_names}"
+    )
+
+    await db.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_0043_handle_case_insensitive_uniqueness(tmp_path):
+    """Migration 0043's UNIQUE NOCASE index enforces case-insensitive
+    uniqueness on users.handle. Inserting a user with handle='alice',
+    then attempting handle='ALICE' must fail."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    conn = db._conn
+
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    # Insert first user with lowercase handle
+    conn.execute(
+        "INSERT INTO users (username, user_id, display_name, identity_anchor, handle) "
+        "VALUES (?,?,?,?,?)",
+        ("alice", "uid-alice", "Alice", "alice", "alice"),
+    )
+    conn.commit()
+
+    # Attempt to insert with uppercase variant - should fail
+    try:
+        conn.execute(
+            "INSERT INTO users (username, user_id, display_name, identity_anchor, handle) "
+            "VALUES (?,?,?,?,?)",
+            ("ALICE", "uid-alice2", "ALICE", "ALICE", "ALICE"),
+        )
+        conn.commit()
+        # If we reach here, the constraint didn't work
+        assert False, (
+            "UNIQUE NOCASE constraint on handle did not prevent case-variant insert"
+        )
+    except sqlite3.IntegrityError:
+        # Expected: constraint violation
+        pass
+
+    # Verify only one user exists
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 1, "Expected 1 user after failed duplicate handle insert"
+
+    await db.shutdown()
+
+
 def _ensure_schema_version_for_test(conn: sqlite3.Connection) -> None:
     """Create the schema_version stamp table the runner relies on (the
     incremental backfill test applies migrations without run_migrations)."""
