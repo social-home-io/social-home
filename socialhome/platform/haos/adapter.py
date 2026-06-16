@@ -267,6 +267,7 @@ class HaosAdapter(PlatformAdapter):
             users=self.users,
             supervisor=self._supervisor_client,
             data_dir=self._data_dir,
+            user_service=app.get(K.user_service_key),
         ).run()
         # Best-effort: pull the newly-provisioned admin's HA avatar
         # into the profile picture cache. Failures only log.

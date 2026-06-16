@@ -29,6 +29,7 @@ async def env(tmp_dir):
 
     e = Env()
     e.db = db
+    e.kp = kp
     e.user_repo = SqliteUserRepo(db)
     e.user_svc = UserService(
         e.user_repo, EventBus(), own_instance_public_key=kp.public_key
@@ -160,6 +161,49 @@ async def test_get_by_user_id(env):
     u = await env.user_svc.provision(username="alice", display_name="Alice")
     got = await env.user_svc.get_by_user_id(u.user_id)
     assert got.username == "alice"
+
+
+async def test_get_by_external_id_scoped_to_ha_source(env):
+    """get_by_external_id resolves an HA-source row by external_id and
+    ignores rows with the same external_id under a non-ha source."""
+    from socialhome.crypto import derive_user_id
+
+    # An HA user with a stable external_id.
+    pk = env.kp.public_key
+    await env.db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, is_admin,"
+        " created_at, source, external_id, identity_anchor)"
+        " VALUES(?,?,?,1,?,'ha',?,?)",
+        (
+            derive_user_id(pk, "haguy"),
+            "haguy",
+            "HA",
+            "2026-01-01T00:00:00+00:00",
+            "ha-x",
+            "haguy",
+        ),
+    )
+    got = await env.user_repo.get_by_external_id("ha-x")
+    assert got is not None and got.username == "haguy"
+
+    # Unknown external_id → None.
+    assert await env.user_repo.get_by_external_id("nope") is None
+
+    # A manual row carrying the same external_id is NOT matched.
+    await env.db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, is_admin,"
+        " created_at, source, external_id, identity_anchor)"
+        " VALUES(?,?,?,0,?,'manual',?,?)",
+        (
+            derive_user_id(pk, "manualguy"),
+            "manualguy",
+            "M",
+            "2026-01-01T00:00:00+00:00",
+            "ha-manual",
+            "anchor",
+        ),
+    )
+    assert await env.user_repo.get_by_external_id("ha-manual") is None
 
 
 async def test_list_blocked_returns_newest_first(env):

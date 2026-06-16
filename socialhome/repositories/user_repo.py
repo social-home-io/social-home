@@ -29,6 +29,7 @@ class AbstractUserRepo(Protocol):
     # Local users ---------------------------------------------------------
     async def get(self, username: str) -> User | None: ...
     async def get_by_user_id(self, user_id: str) -> User | None: ...
+    async def get_by_external_id(self, external_id: str) -> User | None: ...
     async def save(self, user: User) -> User: ...
     async def list_active(self) -> list[User]: ...
     async def list_all(self) -> list[User]: ...
@@ -159,6 +160,20 @@ class SqliteUserRepo:
         row = await self._db.fetchone(
             "SELECT * FROM users WHERE user_id=?",
             (user_id,),
+        )
+        return _row_to_user(row_to_dict(row))
+
+    async def get_by_external_id(self, external_id: str) -> User | None:
+        """Look up an HA-synced user by their stable ``external_id``.
+
+        Scoped to ``source='ha'`` — ``external_id`` is the HA ``user_id``
+        and only meaningful for HA-mirrored rows. Used by the HA bootstrap
+        to find the local row to follow when the HA person was renamed
+        (the username drifts, the ``external_id`` does not).
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM users WHERE external_id=? AND source='ha'",
+            (external_id,),
         )
         return _row_to_user(row_to_dict(row))
 
