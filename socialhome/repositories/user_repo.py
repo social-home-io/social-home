@@ -71,6 +71,7 @@ class AbstractUserRepo(Protocol):
         public_key_hex: str,
         identity_anchor: str | None = None,
     ) -> None: ...
+    async def get_remote_user_identity_pubkey(self, user_id: str) -> bytes | None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
     async def list_all_known_remote(self) -> list[RemoteUser]: ...
     async def get_instance_for_user(self, user_id: str) -> str | None: ...
@@ -604,6 +605,30 @@ class SqliteUserRepo:
             "SET user_identity_public_key=?, identity_anchor=? WHERE user_id=?",
             (public_key_hex, identity_anchor, user_id),
         )
+
+    async def get_remote_user_identity_pubkey(self, user_id: str) -> bytes | None:
+        """Return a remote user's stored per-user identity pubkey ``P`` as bytes.
+
+        Decodes the hex ``remote_users.user_identity_public_key`` — the same
+        portable Ed25519 key the inbound USERS_SYNC / USER_UPDATED path stored
+        after verifying its binding. The move-out verifier reads it as the
+        receiver-stored ``P`` for binding #3. Returns ``None`` when the row is
+        unknown, carries no verified key yet, or the stored value is malformed
+        hex (fail-soft so the caller degrades rather than crashes).
+        """
+        row = await self._db.fetchone(
+            "SELECT user_identity_public_key FROM remote_users WHERE user_id=?",
+            (user_id,),
+        )
+        if row is None:
+            return None
+        hex_key = row["user_identity_public_key"]
+        if not hex_key:
+            return None
+        try:
+            return bytes.fromhex(hex_key)
+        except ValueError:
+            return None
 
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]:
         """List remote users from an instance, excluding deprovisioned rows."""

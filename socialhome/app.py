@@ -196,6 +196,7 @@ from .services.media_orphan_sweep_service import MediaOrphanSweepService
 from .services.space_media_sync_service import SpaceMediaSyncService
 from .services.dm_routing_service import DmRoutingService
 from .services.federation_inbound_service import FederationInboundService
+from .services.user_move_service import UserMoveService
 from .services.relay_policy import RelayPolicy
 from .repositories.instance_ban_repo import SqliteHouseholdInstanceBanRepo
 from .services.poll_federation_outbound import PollFederationOutbound
@@ -746,6 +747,12 @@ def _wire_federation_stack(
         realtime=None,
     )
     inbound_service.attach_to(federation_service)
+
+    # Move-out redirect (move-out): land USER_MOVED redirects + serve the
+    # USER_IDENTITY_RESOLVE pull backstop.
+    user_move_service = UserMoveService(user_repo=user_repo)
+    user_move_service.attach_to(federation_service)
+    app[K.user_move_service_key] = user_move_service
 
     # Family-of-handler modules for pairing, space membership, invites,
     # and content mirroring (§13). Each registers its own slice of the

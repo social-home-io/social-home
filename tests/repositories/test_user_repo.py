@@ -725,3 +725,15 @@ async def test_resolve_current_identity_unmoved_resolves_to_self(env):
 async def test_resolve_current_identity_unknown_returns_none(env):
     """An unknown user_id resolves to None."""
     assert await env.user_repo.resolve_current_identity("ghost") is None
+
+
+async def test_get_remote_user_identity_pubkey_round_trips(env):
+    """The stored verified P is returned hex→bytes; None when absent/unknown."""
+    await _seed_remote_user(env, user_id="moverP", instance_id="siP")
+    # No key stored yet → None.
+    assert await env.user_repo.get_remote_user_identity_pubkey("moverP") is None
+    await env.user_repo.set_remote_user_identity_key("moverP", public_key_hex="ab" * 32)
+    got = await env.user_repo.get_remote_user_identity_pubkey("moverP")
+    assert got == bytes.fromhex("ab" * 32)
+    # Unknown user_id → None.
+    assert await env.user_repo.get_remote_user_identity_pubkey("ghost") is None
