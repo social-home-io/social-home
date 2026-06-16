@@ -239,6 +239,47 @@ class UserService:
         await self._repo.set_admin(username, is_admin)
         return replace(user, is_admin=is_admin)
 
+    async def rename_username(self, username: str, new_username: str) -> None:
+        """Rename a local user's ``username`` (the mutable login label).
+
+        Only ``manual``-source users can be renamed — an ``ha``-synced row's
+        username is owned by Home Assistant, so renaming it would drift from
+        the directory it mirrors (raises :class:`PermissionError`). The
+        ``user_id`` / ``identity_anchor`` are immutable and unaffected, so the
+        cryptographic identity survives the rename (§v_26).
+
+        The repo applies the rename atomically (``UPDATE users`` cascades to
+        the FK children; ``platform_users`` + ``post_comments.author`` are
+        updated explicitly). On success a :class:`UserProfileUpdated` is
+        published so the rename federates to paired peers like any other
+        profile edit. Raises :class:`KeyError` if the user is unknown and
+        :class:`ValueError` if the new name is invalid, reserved, or taken.
+        """
+        user = await self._repo.get(username)
+        if user is None:
+            raise KeyError(f"user {username!r} not found")
+        if user.source != "manual":
+            raise PermissionError(
+                f"username {username!r} is controlled by Home Assistant",
+            )
+        new_username = new_username.strip()
+        if new_username == username:
+            return
+        _validate_username(new_username)
+        if await self._repo.get(new_username) is not None:
+            raise ValueError(f"username {new_username!r} already taken")
+        await self._repo.rename_username(username, new_username)
+        await self._bus.publish(
+            UserProfileUpdated(
+                user_id=user.user_id,
+                username=new_username,
+                display_name=user.display_name,
+                bio=user.bio,
+                picture_hash=user.picture_hash,
+                picture_webp=None,
+            ),
+        )
+
     # ── Profile (display_name + bio + picture) ──────────────────────────
 
     async def patch_profile(

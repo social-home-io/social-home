@@ -445,3 +445,102 @@ async def test_user_list_active(stack):
     await stack.provision_user("act2")
     active = await stack.user_svc.list_active()
     assert len(active) >= 2
+
+
+# ─── rename_username (mutable username) ─────────────────────────────────────
+
+
+async def test_rename_username_renames_row_and_cascades(stack):
+    """A manual user renames: users row + cascaded child + post_comments
+    author all move, and a UserProfileUpdated event fires."""
+    from socialhome.domain.events import UserProfileUpdated
+
+    u = await stack.provision_user("bob", source="manual")
+    await stack.db.enqueue(
+        "INSERT INTO presence(username, entity_id, state) VALUES(?,?,?)",
+        ("bob", "person.bob", "home"),
+    )
+    await stack.db.enqueue(
+        "INSERT INTO feed_posts(id, author, type, content) VALUES(?,?,?,?)",
+        ("p-1", u.user_id, "text", "hi"),
+    )
+    await stack.db.enqueue(
+        "INSERT INTO post_comments(id, post_id, author, type, content) "
+        "VALUES(?,?,?,?,?)",
+        ("c-1", "p-1", "bob", "text", "nice"),
+    )
+    seen: list = []
+    stack.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+
+    await stack.user_svc.rename_username("bob", "bobby")
+
+    assert await stack.user_svc.get("bob") is None
+    renamed = await stack.user_svc.get("bobby")
+    assert renamed is not None
+    assert renamed.user_id == u.user_id  # user_id immutable across rename
+
+    pres = await stack.db.fetchone(
+        "SELECT username FROM presence WHERE entity_id=?", ("person.bob",)
+    )
+    assert pres["username"] == "bobby"
+    com = await stack.db.fetchone(
+        "SELECT author FROM post_comments WHERE id=?", ("c-1",)
+    )
+    assert com["author"] == "bobby"
+
+    assert len(seen) == 1
+    assert seen[0].username == "bobby"
+    assert seen[0].user_id == u.user_id
+
+
+async def test_rename_username_to_taken_name_raises(stack):
+    """Renaming onto an existing username raises and changes nothing."""
+    await stack.provision_user("bob", source="manual")
+    await stack.provision_user("carol", source="manual")
+
+    with pytest.raises(ValueError):
+        await stack.user_svc.rename_username("bob", "carol")
+
+    assert await stack.user_svc.get("bob") is not None
+    assert await stack.user_svc.get("carol") is not None
+
+
+async def test_rename_username_ha_user_forbidden(stack):
+    """An HA-synced user's username is controlled by HA — rename is forbidden."""
+    await stack.provision_user("ha-bob", source="ha")
+
+    with pytest.raises(PermissionError):
+        await stack.user_svc.rename_username("ha-bob", "ha-bobby")
+
+    assert await stack.user_svc.get("ha-bob") is not None
+    assert await stack.user_svc.get("ha-bobby") is None
+
+
+async def test_rename_username_unknown_user_raises(stack):
+    """Renaming a non-existent user raises KeyError."""
+    with pytest.raises(KeyError):
+        await stack.user_svc.rename_username("ghost", "phantom")
+
+
+async def test_rename_username_same_name_is_noop(stack):
+    """Renaming to the same name is a no-op: no error, no event."""
+    from socialhome.domain.events import UserProfileUpdated
+
+    await stack.provision_user("bob", source="manual")
+    seen: list = []
+    stack.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+
+    await stack.user_svc.rename_username("bob", "bob")
+
+    assert await stack.user_svc.get("bob") is not None
+    assert seen == []
+
+
+async def test_rename_username_reserved_name_raises(stack):
+    """A reserved / invalid new name is rejected by validation."""
+    await stack.provision_user("bob", source="manual")
+
+    with pytest.raises(ValueError):
+        await stack.user_svc.rename_username("bob", "admin")
+
+    assert await stack.user_svc.get("bob") is not None

@@ -419,3 +419,58 @@ async def test_get_user_identity_anchor_none_when_unknown_or_null(env):
         ("bob", "u-bob", "Bob", "active", None),
     )
     assert await env.user_repo.get_user_identity_anchor("bob") is None
+
+
+async def test_rename_username_cascades_and_updates_post_comments(env):
+    """``rename_username`` renames the users row, lets the FK cascade carry
+    child rows (presence), updates the non-FK ``post_comments.author``, and
+    renames the ``platform_users`` standalone-login row."""
+    u = await env.user_svc.provision(username="bob", display_name="Bob")
+    # FK child that should cascade via ON UPDATE CASCADE.
+    await env.db.enqueue(
+        "INSERT INTO presence(username, entity_id, state) VALUES(?,?,?)",
+        ("bob", "person.bob", "home"),
+    )
+    # Standalone-login row (cascades platform_tokens, but renamed directly).
+    await env.db.enqueue(
+        "INSERT INTO platform_users(username, display_name) VALUES(?,?)",
+        ("bob", "Bob"),
+    )
+    # Non-FK comment author (plain username text column).
+    await env.db.enqueue(
+        "INSERT INTO feed_posts(id, author, type, content) VALUES(?,?,?,?)",
+        ("post-1", u.user_id, "text", "hi"),
+    )
+    await env.db.enqueue(
+        "INSERT INTO post_comments(id, post_id, author, type, content) "
+        "VALUES(?,?,?,?,?)",
+        ("c-1", "post-1", "bob", "text", "nice"),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    assert await env.user_repo.get("bob") is None
+    renamed = await env.user_repo.get("bobby")
+    assert renamed is not None
+    assert renamed.user_id == u.user_id  # user_id unchanged
+
+    pres = await env.db.fetchone(
+        "SELECT username FROM presence WHERE entity_id=?", ("person.bob",)
+    )
+    assert pres["username"] == "bobby"
+
+    pu = await env.db.fetchone(
+        "SELECT username FROM platform_users WHERE display_name=?", ("Bob",)
+    )
+    assert pu["username"] == "bobby"
+
+    com = await env.db.fetchone("SELECT author FROM post_comments WHERE id=?", ("c-1",))
+    assert com["author"] == "bobby"
+
+
+async def test_rename_username_noop_when_no_platform_user_row(env):
+    """A user with no ``platform_users`` row (HA-style) renames cleanly."""
+    await env.user_svc.provision(username="ada", display_name="Ada")
+    await env.user_repo.rename_username("ada", "ada2")
+    assert await env.user_repo.get("ada") is None
+    assert await env.user_repo.get("ada2") is not None

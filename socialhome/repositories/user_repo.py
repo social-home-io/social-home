@@ -49,6 +49,7 @@ class AbstractUserRepo(Protocol):
     ) -> tuple[bytes, bytes] | None: ...
     async def get_user_identity_anchor(self, username: str) -> str | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
+    async def rename_username(self, old: str, new: str) -> None: ...
 
     # Remote users --------------------------------------------------------
     async def get_remote(self, user_id: str) -> RemoteUser | None: ...
@@ -378,6 +379,40 @@ class SqliteUserRepo:
             "WHERE username=?",
             (now, grace_iso, username),
         )
+
+    async def rename_username(self, old: str, new: str) -> None:
+        """Atomically rename a local user's ``username``.
+
+        ``users.username`` is the parent key for six child FKs (presence,
+        post_drafts, space_aliases, conversation_members, calendars,
+        platform_tokens) which all carry ``ON UPDATE CASCADE`` (migration
+        0042), so the single ``UPDATE users`` propagates to them. Two homes
+        of the username are *not* FK-linked and are updated explicitly in
+        the same transaction:
+
+        * ``platform_users.username`` — the standalone-login row (itself the
+          parent of ``platform_tokens`` via ``ON UPDATE CASCADE``); a no-op
+          UPDATE when the user has no standalone-login row (HA-synced users).
+        * ``post_comments.author`` — a plain username text column, not an FK.
+
+        ``user_id`` / ``identity_anchor`` are immutable and untouched.
+        """
+
+        def _run(conn):
+            conn.execute(
+                "UPDATE users SET username=? WHERE username=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE platform_users SET username=? WHERE username=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE post_comments SET author=? WHERE author=?",
+                (new, old),
+            )
+
+        await self._db.transact(_run)
 
     # ── Remote users ────────────────────────────────────────────────────
 
