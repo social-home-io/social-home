@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from ....repositories.federation_repo import AbstractFederationRepo
     from ....repositories.space_repo import AbstractSpaceRepo
     from ...federation_service import FederationService
+    from ...sync_manager import SyncSessionManager
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,13 @@ log = logging.getLogger(__name__)
 #: 30 minutes between periodic ticks — comfortably under the S-6 5/h
 #: per (instance, space) rate limit.
 PERIODIC_INTERVAL_SECONDS: float = 30 * 60
+
+#: Age past which an in-memory sync session is considered abandoned and
+#: reaped by the periodic tick (§25.6 backstop for the never-emitted
+#: ``SPACE_SYNC_COMPLETE``). 30 min — far longer than any real sync, so
+#: only genuinely-leaked sessions are torn down. With the periodic tick a
+#: leaked session lives at most ~PERIODIC_INTERVAL_SECONDS + this TTL.
+STALE_SESSION_TTL_SECONDS: float = 1800.0
 
 
 class SpaceSyncScheduler:
@@ -49,6 +57,7 @@ class SpaceSyncScheduler:
         "_federation_repo",
         "_space_repo",
         "_queue",
+        "_sync_manager",
         "_own_instance_id",
         "_interval",
         "_task",
@@ -63,6 +72,7 @@ class SpaceSyncScheduler:
         federation_repo: "AbstractFederationRepo",
         space_repo: "AbstractSpaceRepo",
         queue: "ReconnectSyncQueue",
+        sync_manager: "SyncSessionManager",
         own_instance_id: str,
         interval_seconds: float = PERIODIC_INTERVAL_SECONDS,
     ) -> None:
@@ -71,6 +81,7 @@ class SpaceSyncScheduler:
         self._federation_repo = federation_repo
         self._space_repo = space_repo
         self._queue = queue
+        self._sync_manager = sync_manager
         self._own_instance_id = own_instance_id
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
@@ -177,6 +188,13 @@ class SpaceSyncScheduler:
                 continue
 
     async def _tick_once(self) -> None:
+        # Backstop: reap any abandoned in-memory sync sessions. Wrapped so
+        # a reaper error never kills the tick's sync-enqueue work below.
+        try:
+            self._sync_manager.reap_stale(STALE_SESSION_TTL_SECONDS)
+        except Exception:
+            log.exception("space-sync-scheduler: reap_stale failed")
+
         confirmed = [
             inst
             for inst in await self._federation_repo.list_instances()
