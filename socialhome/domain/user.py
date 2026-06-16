@@ -149,6 +149,14 @@ class User:
     # set it (reads from older code paths, test fixtures) still construct.
     identity_anchor: str | None = None
 
+    # Public, mutable, per-household-unique @handle — the public-facing name
+    # (distinct from the login ``username``, which under ``source='ha'`` is
+    # HA-controlled). Backfilled = username for existing rows (migration 0043);
+    # new users get ``handle = username`` at provision. Unsigned display
+    # metadata (federated via USER_UPDATED), never an identity input. Defaulted
+    # ``None`` so older call sites / fixtures still construct.
+    handle: str | None = None
+
     def is_active(self) -> bool:
         return self.state == "active" and self.deleted_at is None
 

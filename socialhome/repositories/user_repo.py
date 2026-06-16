@@ -12,6 +12,7 @@ patching, …) are added here as the services that need them come online.
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
@@ -30,6 +31,7 @@ class AbstractUserRepo(Protocol):
     async def get(self, username: str) -> User | None: ...
     async def get_by_user_id(self, user_id: str) -> User | None: ...
     async def get_by_external_id(self, external_id: str) -> User | None: ...
+    async def get_by_handle(self, handle: str) -> User | None: ...
     async def save(self, user: User) -> User: ...
     async def list_active(self) -> list[User]: ...
     async def list_all(self) -> list[User]: ...
@@ -51,6 +53,7 @@ class AbstractUserRepo(Protocol):
     async def get_user_identity_anchor(self, username: str) -> str | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
     async def rename_username(self, old: str, new: str) -> None: ...
+    async def set_handle(self, username: str, handle: str) -> None: ...
 
     # Remote users --------------------------------------------------------
     async def get_remote(self, user_id: str) -> RemoteUser | None: ...
@@ -177,6 +180,18 @@ class SqliteUserRepo:
         )
         return _row_to_user(row_to_dict(row))
 
+    async def get_by_handle(self, handle: str) -> User | None:
+        """Look up a local user by their public ``handle``, case-insensitively.
+
+        Backs the :meth:`UserService.set_handle` uniqueness pre-check; matches
+        the ``idx_users_handle_nocase`` UNIQUE index collation (migration 0043).
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM users WHERE handle=? COLLATE NOCASE",
+            (handle,),
+        )
+        return _row_to_user(row_to_dict(row))
+
     async def save(self, user: User) -> User:
         """Upsert a local user row.
 
@@ -193,7 +208,7 @@ class SqliteUserRepo:
                 preferences_json, tz, email, phone, date_of_birth,
                 declared_age, is_minor, child_protection_enabled,
                 deleted_at, grace_until, created_at, source, external_id,
-                identity_anchor
+                identity_anchor, handle
             ) VALUES(
                 ?,?,?,?,?,?,
                 ?,?,?,?,
@@ -202,7 +217,7 @@ class SqliteUserRepo:
                 ?,?,?,?,?,
                 ?,?,?,
                 ?,?,COALESCE(?, datetime('now')), ?, ?,
-                ?
+                ?,?
             )
             ON CONFLICT(username) DO UPDATE SET
                 display_name=excluded.display_name,
@@ -231,7 +246,8 @@ class SqliteUserRepo:
                 grace_until=excluded.grace_until,
                 source=excluded.source,
                 external_id=excluded.external_id,
-                identity_anchor=excluded.identity_anchor
+                identity_anchor=excluded.identity_anchor,
+                handle=excluded.handle
             """,
             (
                 user.username,
@@ -264,6 +280,7 @@ class SqliteUserRepo:
                 user.source,
                 user.external_id,
                 user.identity_anchor,
+                user.handle,
             ),
         )
         return user
@@ -440,6 +457,23 @@ class SqliteUserRepo:
             )
 
         await self._db.transact(_run)
+
+    async def set_handle(self, username: str, handle: str) -> None:
+        """Set a local user's public ``handle``.
+
+        The ``idx_users_handle_nocase`` UNIQUE index (migration 0043) enforces
+        per-household, case-insensitive uniqueness. The service does a
+        :meth:`get_by_handle` pre-check, but a concurrent writer could still
+        collide — surface that as the same :class:`ValueError` the service
+        raises rather than letting a raw ``IntegrityError`` become a 500.
+        """
+        try:
+            await self._db.enqueue(
+                "UPDATE users SET handle=? WHERE username=?",
+                (handle, username),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError(f"handle {handle!r} is already taken") from exc
 
     # ── Remote users ────────────────────────────────────────────────────
 
@@ -824,6 +858,7 @@ def _row_to_user(row: dict | None) -> User | None:
         source=row.get("source", "manual"),
         external_id=row.get("external_id"),
         identity_anchor=row.get("identity_anchor"),
+        handle=row.get("handle"),
     )
 
 

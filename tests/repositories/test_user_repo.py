@@ -206,6 +206,34 @@ async def test_get_by_external_id_scoped_to_ha_source(env):
     assert await env.user_repo.get_by_external_id("ha-manual") is None
 
 
+async def test_provision_persists_handle_equal_to_username(env):
+    """provision writes handle == username into the column."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    row = await env.db.fetchone("SELECT handle FROM users WHERE username=?", ("alice",))
+    assert row["handle"] == "alice"
+    got = await env.user_repo.get("alice")
+    assert got is not None and got.handle == "alice"
+
+
+async def test_get_by_handle_is_case_insensitive(env):
+    """get_by_handle resolves regardless of case."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    got = await env.user_repo.get_by_handle("ALICE")
+    assert got is not None and got.username == "alice"
+    assert await env.user_repo.get_by_handle("nope") is None
+
+
+async def test_set_handle_persists(env):
+    """set_handle writes the new handle to the row."""
+    await env.user_svc.provision(username="alice", display_name="Alice")
+    await env.user_repo.set_handle("alice", "ali")
+    got = await env.user_repo.get("alice")
+    assert got is not None and got.handle == "ali"
+    # And resolvable by the new handle, case-insensitively.
+    by_handle = await env.user_repo.get_by_handle("ALI")
+    assert by_handle is not None and by_handle.username == "alice"
+
+
 async def test_list_blocked_returns_newest_first(env):
     """list_blocked returns (blocked_user_id, blocked_at) ordered desc."""
     a = await env.user_svc.provision(username="alice", display_name="Alice")

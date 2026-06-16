@@ -546,6 +546,85 @@ async def test_rename_username_reserved_name_raises(stack):
     assert await stack.user_svc.get("bob") is not None
 
 
+# ─── set_handle (public, per-household-unique handle) ───────────────────────
+
+
+async def test_provision_sets_handle_to_username(stack):
+    """A newly provisioned user gets handle == username."""
+    u = await stack.provision_user("bob")
+    assert u.handle == "bob"
+    fresh = await stack.user_svc.get("bob")
+    assert fresh is not None and fresh.handle == "bob"
+
+
+async def test_set_handle_updates_row_and_publishes_event(stack):
+    """set_handle changes the row and publishes UserProfileUpdated."""
+    from socialhome.domain.events import UserProfileUpdated
+
+    u = await stack.provision_user("bob")
+    seen: list = []
+    stack.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+
+    await stack.user_svc.set_handle("bob", "bobby")
+
+    fresh = await stack.user_svc.get("bob")
+    assert fresh is not None and fresh.handle == "bobby"
+    assert len(seen) == 1
+    assert seen[0].user_id == u.user_id
+    assert seen[0].handle == "bobby"
+
+
+async def test_set_handle_taken_case_insensitive_raises(stack):
+    """A handle already taken (any case) by another user raises ValueError."""
+    await stack.provision_user("bob")
+    await stack.provision_user("carol")
+
+    with pytest.raises(ValueError, match="already taken"):
+        await stack.user_svc.set_handle("bob", "CAROL")
+
+    fresh = await stack.user_svc.get("bob")
+    assert fresh is not None and fresh.handle == "bob"
+
+
+async def test_set_handle_editable_for_ha_user(stack):
+    """An ha-source user CAN change their handle (no source guard)."""
+    await stack.provision_user("ha-bob", source="ha")
+
+    await stack.user_svc.set_handle("ha-bob", "publicbob")
+
+    fresh = await stack.user_svc.get("ha-bob")
+    assert fresh is not None and fresh.handle == "publicbob"
+
+
+async def test_set_handle_same_value_is_noop(stack):
+    """Setting the handle to its current value publishes nothing."""
+    from socialhome.domain.events import UserProfileUpdated
+
+    await stack.provision_user("bob")
+    seen: list = []
+    stack.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+
+    await stack.user_svc.set_handle("bob", "bob")
+
+    assert seen == []
+
+
+async def test_set_handle_unknown_user_raises(stack):
+    with pytest.raises(KeyError):
+        await stack.user_svc.set_handle("ghost", "phantom")
+
+
+async def test_set_handle_reserved_name_raises(stack):
+    """A reserved / invalid handle is rejected by validation."""
+    await stack.provision_user("bob")
+
+    with pytest.raises(ValueError):
+        await stack.user_svc.set_handle("bob", "admin")
+
+    fresh = await stack.user_svc.get("bob")
+    assert fresh is not None and fresh.handle == "bob"
+
+
 # ─── apply_ha_username (HA-authoritative rename-follow) ─────────────────────
 
 
