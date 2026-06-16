@@ -532,3 +532,67 @@ async def test_instance_sync_status_extracts_space_ids_from_dicts():
         payload={"spaces": [{"space_id": "sp-1"}, {"space_id": "sp-2"}, {"junk": "x"}]},
     )
     assert spaces == ["sp-1", "sp-2"]
+
+
+# ─── register_requester_https_session (HTTPS/mesh receive session) ─────────
+
+
+def test_register_requester_https_session_creates_https_receive_session():
+    """A mesh requester registers an HTTPS receive-session up front so the
+    inbound SPACE_SYNC_CHUNK handler finds it instead of dropping chunks."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    ok = mgr.register_requester_https_session(
+        sync_id="sync-1",
+        space_id="sp-1",
+        requester_instance_id="me",
+        provider_instance_id="host",
+    )
+    assert ok is True
+    rec = mgr.get_session("sync-1")
+    assert rec is not None
+    assert rec.transport_mode == "https"
+    assert rec.provider_instance_id == "host"
+    assert rec.requester_instance_id == "me"
+    assert rec.space_id == "sp-1"
+    assert rec.sync_mode == "initial"
+    assert rec.rtc is None
+    assert rec.created_at > 0
+
+
+def test_register_requester_https_session_does_not_clobber_existing():
+    """Second call with the same sync_id returns False and keeps the first
+    record intact."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    first = mgr.register_requester_https_session(
+        sync_id="sync-1",
+        space_id="sp-1",
+        requester_instance_id="me",
+        provider_instance_id="host",
+    )
+    assert first is True
+    again = mgr.register_requester_https_session(
+        sync_id="sync-1",
+        space_id="sp-OTHER",
+        requester_instance_id="someone-else",
+        provider_instance_id="other-host",
+    )
+    assert again is False
+    rec = mgr.get_session("sync-1")
+    assert rec is not None
+    # Unchanged from the first registration.
+    assert rec.space_id == "sp-1"
+    assert rec.provider_instance_id == "host"
+    assert rec.requester_instance_id == "me"
+
+
+def test_register_requester_https_session_fresh_id_returns_true():
+    mgr = SyncSessionManager(_FakeFedRepo())
+    assert (
+        mgr.register_requester_https_session(
+            sync_id="fresh",
+            space_id="sp-1",
+            requester_instance_id="me",
+            provider_instance_id="host",
+        )
+        is True
+    )

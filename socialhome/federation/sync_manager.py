@@ -357,6 +357,42 @@ class SyncSessionManager:
         self._sessions[sync_id] = record
         return SyncDecision(accepted=True)
 
+    def register_requester_https_session(
+        self,
+        *,
+        sync_id: str,
+        space_id: str,
+        requester_instance_id: str,
+        provider_instance_id: str,
+        sync_mode: str = "initial",
+    ) -> bool:
+        """Register a requester-role receive session for an HTTPS/mesh sync.
+
+        A mesh member (not directly paired with the host) cannot do the RTC
+        handshake — ICE can't traverse a relay — so it never gets a session
+        via :meth:`apply_offer`. It must register one up front before sending
+        SPACE_SYNC_BEGIN(prefer_direct=False), so the inbound (routed)
+        SPACE_SYNC_CHUNK handler finds it instead of dropping the chunks.
+
+        Sets ``transport_mode="https"`` and ``provider_instance_id`` = the host
+        so the chunk handler's provider-origin guard matches. No rtc handle, no
+        admission checks (those are the provider's job in ``begin_session``).
+        Returns False (no-op) if a session for ``sync_id`` already exists.
+        """
+        if sync_id in self._sessions:
+            return False
+        self._sessions[sync_id] = SyncSessionRecord(
+            sync_id=sync_id,
+            space_id=space_id,
+            requester_instance_id=requester_instance_id,
+            provider_instance_id=provider_instance_id,
+            sync_mode=sync_mode,
+            rtc=None,
+            created_at=time.time(),
+            transport_mode="https",
+        )
+        return True
+
     # ─── S-13/S-14: offer / answer / ice apply ────────────────────────────
 
     async def apply_offer(
