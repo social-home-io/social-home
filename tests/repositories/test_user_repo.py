@@ -518,3 +518,49 @@ async def test_rename_username_noop_when_no_platform_user_row(env):
     await env.user_repo.rename_username("ada", "ada2")
     assert await env.user_repo.get("ada") is None
     assert await env.user_repo.get("ada2") is not None
+
+
+async def test_rename_username_updates_locally_owned_space_owner(env):
+    """Renaming a local space owner carries ``spaces.owner_username`` so
+    owner-authority paths keep resolving the actor after the rename."""
+    from socialhome.crypto import derive_instance_id
+
+    self_iid = derive_instance_id(env.kp.public_key)
+    await env.user_svc.provision(username="bob", display_name="Bob")
+    await env.db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES(?,?,?,?,?)",
+        ("space-1", "Bob's Space", self_iid, "bob", "ab" * 32),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    row = await env.db.fetchone(
+        "SELECT owner_username FROM spaces WHERE id=?", ("space-1",)
+    )
+    assert row["owner_username"] == "bobby"
+
+
+async def test_rename_username_leaves_remote_owned_space_untouched(env):
+    """A remote-owned space whose remote owner happens to share the local
+    username is NOT touched (scoped to our own instance)."""
+    await env.user_svc.provision(username="bob", display_name="Bob")
+    # Remote owner coincidentally also named 'bob', on a different instance.
+    await env.db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES(?,?,?,?,?)",
+        (
+            "space-remote",
+            "Remote Space",
+            "REMOTEINSTANCEID00000000000000AA",
+            "bob",
+            "cd" * 32,
+        ),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    row = await env.db.fetchone(
+        "SELECT owner_username FROM spaces WHERE id=?", ("space-remote",)
+    )
+    assert row["owner_username"] == "bob"

@@ -409,6 +409,12 @@ class SqliteUserRepo:
           parent of ``platform_tokens`` via ``ON UPDATE CASCADE``); a no-op
           UPDATE when the user has no standalone-login row (HA-synced users).
         * ``post_comments.author`` — a plain username text column, not an FK.
+        * ``spaces.owner_username`` — a non-FK column (a space owner may be
+          remote, so migration 0042 deliberately doesn't cascade it). Scoped
+          to spaces *we* own (``owner_instance_id`` = our self instance) so a
+          remote-owned space whose remote owner happens to share this username
+          is left untouched; otherwise the old name strands owner-authority
+          lookups (``_actor_or_raise(space.owner_username)`` → ``KeyError``).
 
         ``user_id`` / ``identity_anchor`` are immutable and untouched.
         """
@@ -424,6 +430,12 @@ class SqliteUserRepo:
             )
             conn.execute(
                 "UPDATE post_comments SET author=? WHERE author=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE spaces SET owner_username=? "
+                "WHERE owner_username=? AND owner_instance_id=("
+                "  SELECT instance_id FROM instance_identity WHERE id='self')",
                 (new, old),
             )
 
