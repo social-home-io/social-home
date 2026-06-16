@@ -27,8 +27,12 @@
 --
 -- ``calendars`` is referenced by ``calendar_events(calendar_id)``, so the
 -- rebuild runs with ``foreign_keys`` momentarily OFF — the SQLite-mandated
--- procedure for rebuilding a *parent* table — then re-enables enforcement and
--- runs ``foreign_key_check`` to prove no dangling reference was introduced.
+-- procedure for rebuilding a *parent* table — then re-enables enforcement.
+-- Safety comes from the faithful, id-preserving row copy (no reference is
+-- broken). ``foreign_key_check`` below is informational only: under
+-- ``executescript`` it returns any violation rows rather than raising, and the
+-- runner discards results, so it does not abort the migration — it is a
+-- developer tripwire when run by hand, not an enforced guard.
 -- The runner opens the connection in autocommit mode, so these PRAGMAs take
 -- effect between statements.
 PRAGMA foreign_keys=OFF;
