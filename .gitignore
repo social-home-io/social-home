@@ -73,3 +73,8 @@ socialhome/global_server/static/*.module-*.js
 # Superpowers implementation plans — agent scratch kept local to the
 # working copy, never committed upstream.
 docs/superpowers/
+
+# Local Claude Code git worktrees and UX-gate screenshot scratch —
+# working-copy-only, never committed upstream.
+.claude/worktrees/
+.uxgate/
