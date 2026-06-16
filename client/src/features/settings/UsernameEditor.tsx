@@ -98,7 +98,7 @@ export function UsernameEditor() {
         Username
         <input
           value={value.value}
-          maxLength={64}
+          maxLength={32}
           autocomplete="off"
           autocapitalize="off"
           spellcheck={false}
