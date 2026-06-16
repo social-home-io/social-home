@@ -12,6 +12,8 @@ from socialhome.crypto import (
     generate_identity_keypair,
 )
 from socialhome.db.database import AsyncDatabase
+from socialhome.domain.events import UserProfileUpdated
+from socialhome.infrastructure.event_bus import EventBus
 from socialhome.platform.haos.bootstrap import (
     BOOTSTRAP_FLAG,
     INTEGRATION_TOKEN_FILENAME,
@@ -19,6 +21,8 @@ from socialhome.platform.haos.bootstrap import (
     HaBootstrap,
 )
 from socialhome.platform.haos.supervisor import AddonInfo
+from socialhome.repositories.user_repo import SqliteUserRepo
+from socialhome.services.user_service import UserService
 
 
 # ─── Fakes ───────────────────────────────────────────────────────────────
@@ -109,6 +113,7 @@ def _make_bootstrap(
         users=users or _FakeUsers(),
         supervisor=supervisor or _FakeSupervisor(),
         data_dir=env.data_dir,
+        user_service=env.user_svc,
     )
 
 
@@ -131,6 +136,13 @@ async def env(tmp_dir):
     data_dir = tmp_dir / "data"
     data_dir.mkdir()
 
+    bus = EventBus()
+    user_svc = UserService(
+        SqliteUserRepo(db),
+        bus,
+        own_instance_public_key=kp.public_key,
+    )
+
     class Env:
         pass
 
@@ -139,6 +151,8 @@ async def env(tmp_dir):
     e.data_dir = str(data_dir)
     e.kp = kp
     e.iid = iid
+    e.bus = bus
+    e.user_svc = user_svc
     yield e
     await db.shutdown()
 
@@ -417,3 +431,133 @@ async def test_run_discovery_skipped_when_self_info_unavailable(env):
 async def test_bootstrap_flag_constant():
     """BOOTSTRAP_FLAG matches the historical migration key."""
     assert BOOTSTRAP_FLAG == "ha_bootstrap_done"
+
+
+# ─── HA-side person rename follows the username (match by external_id) ──────
+
+
+async def test_run_follows_ha_rename(env):
+    """Seed an HA owner, then re-run with the HA person renamed (same
+    external_id): the local row is RENAMED (matched by external_id, not a
+    new row), a child row cascades, and a profile event federates."""
+    seen: list = []
+    env.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+
+    # First boot — provisions `oldname` (external_id ha-1).
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="oldname", owner_external_id="ha-1")
+    ).run()
+    uid = await env.db.fetchval(
+        "SELECT user_id FROM users WHERE username=?", ("oldname",)
+    )
+    assert uid is not None
+    # Seed a child row that must cascade with the rename.
+    await env.db.enqueue(
+        "INSERT INTO presence(username, entity_id, state) VALUES(?,?,?)",
+        ("oldname", "person.x", "home"),
+    )
+    seen.clear()
+
+    # Second boot — HA renamed the person to `newname` (same external_id).
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="newname", owner_external_id="ha-1")
+    ).run()
+
+    assert (
+        await env.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE username=?", ("oldname",)
+        )
+        == 0
+    )
+    row = await env.db.fetchone(
+        "SELECT user_id, source, external_id, is_admin FROM users WHERE username=?",
+        ("newname",),
+    )
+    assert row is not None
+    assert row["user_id"] == uid  # same row, renamed — user_id immutable
+    assert row["source"] == "ha"
+    assert row["external_id"] == "ha-1"
+    assert row["is_admin"] == 1
+    # Exactly one row for this external_id.
+    assert (
+        await env.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE external_id=?", ("ha-1",), default=0
+        )
+        == 1
+    )
+    # Child row cascaded.
+    pres = await env.db.fetchone(
+        "SELECT username FROM presence WHERE entity_id=?", ("person.x",)
+    )
+    assert pres["username"] == "newname"
+    # Rename federated.
+    assert any(ev.username == "newname" and ev.user_id == uid for ev in seen)
+
+
+async def test_run_rename_then_idempotent(env):
+    """After a rename-follow, a further re-run with the same HA name is a
+    no-op: no dupe row, no extra profile event."""
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="newname", owner_external_id="ha-1")
+    ).run()
+
+    seen: list = []
+    env.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="newname", owner_external_id="ha-1")
+    ).run()
+
+    assert (
+        await env.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE external_id=?", ("ha-1",), default=0
+        )
+        == 1
+    )
+    assert seen == []
+
+
+async def test_run_first_provision_unchanged(env):
+    """Unknown external_id → INSERT path: identity_anchor=username,
+    source='ha', external_id preserved."""
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="freshuser", owner_external_id="ha-new")
+    ).run()
+
+    row = await env.db.fetchone(
+        "SELECT identity_anchor, source, external_id FROM users WHERE username=?",
+        ("freshuser",),
+    )
+    assert row is not None
+    assert row["identity_anchor"] == "freshuser"
+    assert row["source"] == "ha"
+    assert row["external_id"] == "ha-new"
+
+
+async def test_run_invalid_ha_name_keeps_old_username(env):
+    """If the renamed HA person's name fails validation, the old username
+    is kept (no crash, no rename, no event)."""
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="goodname", owner_external_id="ha-1")
+    ).run()
+
+    seen: list = []
+    env.bus.subscribe(UserProfileUpdated, lambda ev: seen.append(ev))
+    # "admin" is reserved → invalid username.
+    await _make_bootstrap(
+        env, users=_FakeUsers(owner_username="admin", owner_external_id="ha-1")
+    ).run()
+
+    # Old username kept; no row under the invalid name.
+    assert (
+        await env.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE username=?", ("goodname",), default=0
+        )
+        == 1
+    )
+    assert (
+        await env.db.fetchval(
+            "SELECT COUNT(*) FROM users WHERE username=?", ("admin",), default=0
+        )
+        == 0
+    )
+    assert seen == []

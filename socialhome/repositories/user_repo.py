@@ -29,6 +29,7 @@ class AbstractUserRepo(Protocol):
     # Local users ---------------------------------------------------------
     async def get(self, username: str) -> User | None: ...
     async def get_by_user_id(self, user_id: str) -> User | None: ...
+    async def get_by_external_id(self, external_id: str) -> User | None: ...
     async def save(self, user: User) -> User: ...
     async def list_active(self) -> list[User]: ...
     async def list_all(self) -> list[User]: ...
@@ -49,6 +50,7 @@ class AbstractUserRepo(Protocol):
     ) -> tuple[bytes, bytes] | None: ...
     async def get_user_identity_anchor(self, username: str) -> str | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
+    async def rename_username(self, old: str, new: str) -> None: ...
 
     # Remote users --------------------------------------------------------
     async def get_remote(self, user_id: str) -> RemoteUser | None: ...
@@ -158,6 +160,20 @@ class SqliteUserRepo:
         row = await self._db.fetchone(
             "SELECT * FROM users WHERE user_id=?",
             (user_id,),
+        )
+        return _row_to_user(row_to_dict(row))
+
+    async def get_by_external_id(self, external_id: str) -> User | None:
+        """Look up an HA-synced user by their stable ``external_id``.
+
+        Scoped to ``source='ha'`` — ``external_id`` is the HA ``user_id``
+        and only meaningful for HA-mirrored rows. Used by the HA bootstrap
+        to find the local row to follow when the HA person was renamed
+        (the username drifts, the ``external_id`` does not).
+        """
+        row = await self._db.fetchone(
+            "SELECT * FROM users WHERE external_id=? AND source='ha'",
+            (external_id,),
         )
         return _row_to_user(row_to_dict(row))
 
@@ -378,6 +394,52 @@ class SqliteUserRepo:
             "WHERE username=?",
             (now, grace_iso, username),
         )
+
+    async def rename_username(self, old: str, new: str) -> None:
+        """Atomically rename a local user's ``username``.
+
+        ``users.username`` is the parent key for six child FKs (presence,
+        post_drafts, space_aliases, conversation_members, calendars,
+        platform_tokens) which all carry ``ON UPDATE CASCADE`` (migration
+        0042), so the single ``UPDATE users`` propagates to them. Two homes
+        of the username are *not* FK-linked and are updated explicitly in
+        the same transaction:
+
+        * ``platform_users.username`` — the standalone-login row (itself the
+          parent of ``platform_tokens`` via ``ON UPDATE CASCADE``); a no-op
+          UPDATE when the user has no standalone-login row (HA-synced users).
+        * ``post_comments.author`` — a plain username text column, not an FK.
+        * ``spaces.owner_username`` — a non-FK column (a space owner may be
+          remote, so migration 0042 deliberately doesn't cascade it). Scoped
+          to spaces *we* own (``owner_instance_id`` = our self instance) so a
+          remote-owned space whose remote owner happens to share this username
+          is left untouched; otherwise the old name strands owner-authority
+          lookups (``_actor_or_raise(space.owner_username)`` → ``KeyError``).
+
+        ``user_id`` / ``identity_anchor`` are immutable and untouched.
+        """
+
+        def _run(conn):
+            conn.execute(
+                "UPDATE users SET username=? WHERE username=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE platform_users SET username=? WHERE username=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE post_comments SET author=? WHERE author=?",
+                (new, old),
+            )
+            conn.execute(
+                "UPDATE spaces SET owner_username=? "
+                "WHERE owner_username=? AND owner_instance_id=("
+                "  SELECT instance_id FROM instance_identity WHERE id='self')",
+                (new, old),
+            )
+
+        await self._db.transact(_run)
 
     # ── Remote users ────────────────────────────────────────────────────
 

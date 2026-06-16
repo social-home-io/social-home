@@ -117,6 +117,14 @@ central registry is involved.
   events, etc.), it ships a signed assertion binding the `user_id`
   to the username + display name. Receivers verify the signature
   with the home instance's public key on every inbound event.
+- **`username`** — a **mutable login label** distinct from the
+  cryptographic `user_id`. Standalone users rename it via
+  `POST /api/me/username`; HA-mode usernames follow the HA person
+  name on every boot. Renames cascade locally (migration `0042`
+  adds `ON UPDATE CASCADE` to all referencing foreign keys) and
+  federate via `USER_UPDATED` events so peers keep their
+  `remote_users.username` in sync. The cryptographic identity
+  (`user_id` / `identity_anchor`) is unaffected by a rename.
 
 #### Instance identity vs. per-user identity
 

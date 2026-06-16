@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import secrets
 import uuid
 from dataclasses import replace
@@ -41,6 +42,8 @@ from ..repositories.profile_picture_repo import (
     compute_picture_hash,
 )
 from ..repositories.user_repo import AbstractUserRepo
+
+log = logging.getLogger(__name__)
 
 _USERNAME_MAX_LENGTH = 32
 
@@ -238,6 +241,105 @@ class UserService:
             raise KeyError(f"user {username!r} not found")
         await self._repo.set_admin(username, is_admin)
         return replace(user, is_admin=is_admin)
+
+    async def rename_username(self, username: str, new_username: str) -> None:
+        """Rename a local user's ``username`` (the mutable login label).
+
+        Only ``manual``-source users can be renamed — an ``ha``-synced row's
+        username is owned by Home Assistant, so renaming it would drift from
+        the directory it mirrors (raises :class:`PermissionError`). The
+        ``user_id`` / ``identity_anchor`` are immutable and unaffected, so the
+        cryptographic identity survives the rename (§v_26).
+
+        The repo applies the rename atomically (``UPDATE users`` cascades to
+        the FK children; ``platform_users`` + ``post_comments.author`` are
+        updated explicitly). On success a :class:`UserProfileUpdated` is
+        published so the rename federates to paired peers like any other
+        profile edit. Raises :class:`KeyError` if the user is unknown and
+        :class:`ValueError` if the new name is invalid, reserved, or taken.
+        """
+        user = await self._repo.get(username)
+        if user is None:
+            raise KeyError(f"user {username!r} not found")
+        if user.source != "manual":
+            raise PermissionError(
+                f"username {username!r} is controlled by Home Assistant",
+            )
+        new_username = new_username.strip()
+        if new_username == username:
+            return
+        _validate_username(new_username)
+        if await self._repo.get(new_username) is not None:
+            raise ValueError(f"username {new_username!r} already taken")
+        await self._repo.rename_username(username, new_username)
+        await self._bus.publish(
+            UserProfileUpdated(
+                user_id=user.user_id,
+                username=new_username,
+                display_name=user.display_name,
+                bio=user.bio,
+                picture_hash=user.picture_hash,
+                picture_webp=None,
+            ),
+        )
+
+    async def apply_ha_username(self, external_id: str, new_username: str) -> None:
+        """Follow a Home-Assistant-side person rename onto the local row.
+
+        HA owns an ``ha``-source user's username; this is the HA-authoritative
+        counterpart to :meth:`rename_username` (which guards against renaming
+        HA rows). The local row is matched by its stable ``external_id`` (the
+        HA ``user_id``) — never by username, since the username is precisely
+        what may have drifted. When the stored ``username`` differs from the
+        HA person's current name the row is renamed (cascading via the repo)
+        and a :class:`UserProfileUpdated` is published so the rename federates.
+
+        No ``source`` guard (unlike :meth:`rename_username`): HA is the source
+        of truth here. The new name must still pass :func:`_validate_username`
+        — HA display names can be arbitrary, so an invalid name is logged at
+        WARNING and the old username is kept rather than crashing the boot.
+
+        No-ops (no event) when the external_id is unknown locally or the name
+        is unchanged, so it is safe to call on every boot.
+        """
+        new_username = new_username.strip()
+        user = await self._repo.get_by_external_id(external_id)
+        if user is None:
+            return
+        if user.username == new_username:
+            return
+        try:
+            _validate_username(new_username)
+        except ValueError as exc:
+            log.warning(
+                "apply_ha_username: HA name %r for external_id %r is invalid"
+                " (%s) — keeping %r",
+                new_username,
+                external_id,
+                exc,
+                user.username,
+            )
+            return
+        if await self._repo.get(new_username) is not None:
+            log.warning(
+                "apply_ha_username: HA name %r for external_id %r is already"
+                " taken — keeping %r",
+                new_username,
+                external_id,
+                user.username,
+            )
+            return
+        await self._repo.rename_username(user.username, new_username)
+        await self._bus.publish(
+            UserProfileUpdated(
+                user_id=user.user_id,
+                username=new_username,
+                display_name=user.display_name,
+                bio=user.bio,
+                picture_hash=user.picture_hash,
+                picture_webp=None,
+            ),
+        )
 
     # ── Profile (display_name + bio + picture) ──────────────────────────
 

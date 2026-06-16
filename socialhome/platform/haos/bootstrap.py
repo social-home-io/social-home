@@ -39,6 +39,7 @@ from ...db import AsyncDatabase
 from .supervisor import SupervisorClient
 
 if TYPE_CHECKING:
+    from ...services.user_service import UserService
     from ..ha.providers import HaUserDirectory
 
 log = logging.getLogger(__name__)
@@ -67,9 +68,14 @@ class HaBootstrap:
         Directory where the raw integration token is persisted so the
         discovery push can read it on subsequent boots. Typically
         ``config.data_dir`` — ``/data`` in add-on mode.
+    user_service:
+        :class:`UserService` used to follow a HA-side person rename onto
+        the local row (matched by ``external_id``) so the rename cascades
+        and federates. Optional so early-boot/test wiring can build a bare
+        bootstrap; when absent the rename-follow step is skipped.
     """
 
-    __slots__ = ("_db", "_users", "_sv", "_data_dir")
+    __slots__ = ("_db", "_users", "_sv", "_data_dir", "_user_service")
 
     def __init__(
         self,
@@ -77,34 +83,84 @@ class HaBootstrap:
         users: HaUserDirectory,
         supervisor: SupervisorClient,
         data_dir: str,
+        user_service: UserService | None = None,
     ) -> None:
         self._db = db
         self._users = users
         self._sv = supervisor
         self._data_dir = data_dir
+        self._user_service = user_service
 
     # ─── Public entry point ───────────────────────────────────────────────
 
     async def run(self) -> None:
-        """Run the full bootstrap. Idempotent."""
-        if not await self._is_done():
-            owner = await self._users.get_owner()
-            if owner is not None:
-                await self._provision_admin(
-                    username=owner.username,
-                    display_name=owner.display_name,
-                    external_id=owner.external_id,
-                )
+        """Run the full bootstrap. Idempotent.
+
+        The owner is re-mirrored on *every* boot (not just first boot): a
+        HA-side person rename drifts the HA username away from the stored
+        ``users.username``, and :meth:`_mirror_owner` follows it onto the
+        local row. The one-off steps (integration token, ``ha_bootstrap_done``
+        flag) stay gated by :meth:`_is_done`.
+        """
+        owner = await self._users.get_owner()
+        if owner is not None:
+            await self._mirror_owner(
+                username=owner.username,
+                display_name=owner.display_name,
+                external_id=owner.external_id,
+            )
+            if not await self._is_done():
                 await self._generate_integration_token(owner.username)
                 await self._mark_done()
                 log.info(
                     "ha_bootstrap: admin provisioned as %r",
                     owner.username,
                 )
-            else:
-                log.warning("ha_bootstrap: could not determine HA owner — skipping")
+        else:
+            log.warning("ha_bootstrap: could not determine HA owner — skipping")
 
         await self._push_discovery()
+
+    async def _mirror_owner(
+        self,
+        *,
+        username: str,
+        display_name: str,
+        external_id: str | None,
+    ) -> None:
+        """Reconcile the local HA owner row with HA's current person record.
+
+        Runs every boot. Matches the existing row by the stable
+        ``external_id`` (the HA ``user_id``), so a HA-side rename is followed
+        rather than orphaning the old row / inserting a duplicate:
+
+        * existing row found, HA name changed → rename-follow via
+          :meth:`UserService.apply_ha_username` (cascades + federates);
+        * existing row found, name unchanged → no-op;
+        * no row for this ``external_id`` → first provision (INSERT).
+        """
+        if external_id is not None and self._user_service is not None:
+            existing = await self._db.fetchone(
+                "SELECT username FROM users WHERE external_id=? AND source='ha'",
+                (external_id,),
+            )
+            if existing is not None:
+                # Known HA row — follow any HA-side rename onto it (no-op when
+                # the name is unchanged). Keeps is_admin/source/external_id via
+                # the cascade-preserving repo rename; never inserts a dupe.
+                await self._user_service.apply_ha_username(external_id, username)
+                await self._db.enqueue(
+                    "UPDATE users SET is_admin=1, state='active', source='ha'"
+                    " WHERE external_id=? AND source='ha'",
+                    (external_id,),
+                )
+                return
+
+        await self._provision_admin(
+            username=username,
+            display_name=display_name,
+            external_id=external_id,
+        )
 
     # ─── Provisioning ────────────────────────────────────────────────────
 
@@ -123,19 +179,34 @@ class HaBootstrap:
         don't have to re-resolve username → id. The id is stable
         across HA display-name renames that would otherwise change
         the entity slug.
+
+        The existing-row lookup is keyed on the stable ``external_id``
+        when HA supplied one (the HA username may have drifted via a
+        rename); it falls back to the username only when no
+        ``external_id`` is known. :meth:`_mirror_owner` handles the
+        rename-follow before this is reached, so the existing-row branch
+        here just re-asserts ``is_admin`` / ``source`` without inserting
+        a duplicate.
         """
-        existing = await self._db.fetchone(
-            "SELECT user_id FROM users WHERE username=?",
-            (username,),
-        )
+        existing = None
+        if external_id is not None:
+            existing = await self._db.fetchone(
+                "SELECT user_id FROM users WHERE external_id=? AND source='ha'",
+                (external_id,),
+            )
+        if existing is None:
+            existing = await self._db.fetchone(
+                "SELECT user_id FROM users WHERE username=?",
+                (username,),
+            )
         if existing is not None:
             # Already provisioned — ensure is_admin=1 in case it was demoted
             # and stamp source='ha' + the latest external_id so the row
             # tracks any HA-side rotation.
             await self._db.enqueue(
                 "UPDATE users SET is_admin=1, state='active', source='ha',"
-                " external_id=? WHERE username=?",
-                (external_id, username),
+                " external_id=? WHERE user_id=?",
+                (external_id, existing["user_id"]),
             )
             return
 

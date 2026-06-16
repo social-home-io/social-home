@@ -29,6 +29,7 @@ async def env(tmp_dir):
 
     e = Env()
     e.db = db
+    e.kp = kp
     e.user_repo = SqliteUserRepo(db)
     e.user_svc = UserService(
         e.user_repo, EventBus(), own_instance_public_key=kp.public_key
@@ -160,6 +161,49 @@ async def test_get_by_user_id(env):
     u = await env.user_svc.provision(username="alice", display_name="Alice")
     got = await env.user_svc.get_by_user_id(u.user_id)
     assert got.username == "alice"
+
+
+async def test_get_by_external_id_scoped_to_ha_source(env):
+    """get_by_external_id resolves an HA-source row by external_id and
+    ignores rows with the same external_id under a non-ha source."""
+    from socialhome.crypto import derive_user_id
+
+    # An HA user with a stable external_id.
+    pk = env.kp.public_key
+    await env.db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, is_admin,"
+        " created_at, source, external_id, identity_anchor)"
+        " VALUES(?,?,?,1,?,'ha',?,?)",
+        (
+            derive_user_id(pk, "haguy"),
+            "haguy",
+            "HA",
+            "2026-01-01T00:00:00+00:00",
+            "ha-x",
+            "haguy",
+        ),
+    )
+    got = await env.user_repo.get_by_external_id("ha-x")
+    assert got is not None and got.username == "haguy"
+
+    # Unknown external_id → None.
+    assert await env.user_repo.get_by_external_id("nope") is None
+
+    # A manual row carrying the same external_id is NOT matched.
+    await env.db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, is_admin,"
+        " created_at, source, external_id, identity_anchor)"
+        " VALUES(?,?,?,0,?,'manual',?,?)",
+        (
+            derive_user_id(pk, "manualguy"),
+            "manualguy",
+            "M",
+            "2026-01-01T00:00:00+00:00",
+            "ha-manual",
+            "anchor",
+        ),
+    )
+    assert await env.user_repo.get_by_external_id("ha-manual") is None
 
 
 async def test_list_blocked_returns_newest_first(env):
@@ -419,3 +463,104 @@ async def test_get_user_identity_anchor_none_when_unknown_or_null(env):
         ("bob", "u-bob", "Bob", "active", None),
     )
     assert await env.user_repo.get_user_identity_anchor("bob") is None
+
+
+async def test_rename_username_cascades_and_updates_post_comments(env):
+    """``rename_username`` renames the users row, lets the FK cascade carry
+    child rows (presence), updates the non-FK ``post_comments.author``, and
+    renames the ``platform_users`` standalone-login row."""
+    u = await env.user_svc.provision(username="bob", display_name="Bob")
+    # FK child that should cascade via ON UPDATE CASCADE.
+    await env.db.enqueue(
+        "INSERT INTO presence(username, entity_id, state) VALUES(?,?,?)",
+        ("bob", "person.bob", "home"),
+    )
+    # Standalone-login row (cascades platform_tokens, but renamed directly).
+    await env.db.enqueue(
+        "INSERT INTO platform_users(username, display_name) VALUES(?,?)",
+        ("bob", "Bob"),
+    )
+    # Non-FK comment author (plain username text column).
+    await env.db.enqueue(
+        "INSERT INTO feed_posts(id, author, type, content) VALUES(?,?,?,?)",
+        ("post-1", u.user_id, "text", "hi"),
+    )
+    await env.db.enqueue(
+        "INSERT INTO post_comments(id, post_id, author, type, content) "
+        "VALUES(?,?,?,?,?)",
+        ("c-1", "post-1", "bob", "text", "nice"),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    assert await env.user_repo.get("bob") is None
+    renamed = await env.user_repo.get("bobby")
+    assert renamed is not None
+    assert renamed.user_id == u.user_id  # user_id unchanged
+
+    pres = await env.db.fetchone(
+        "SELECT username FROM presence WHERE entity_id=?", ("person.bob",)
+    )
+    assert pres["username"] == "bobby"
+
+    pu = await env.db.fetchone(
+        "SELECT username FROM platform_users WHERE display_name=?", ("Bob",)
+    )
+    assert pu["username"] == "bobby"
+
+    com = await env.db.fetchone("SELECT author FROM post_comments WHERE id=?", ("c-1",))
+    assert com["author"] == "bobby"
+
+
+async def test_rename_username_noop_when_no_platform_user_row(env):
+    """A user with no ``platform_users`` row (HA-style) renames cleanly."""
+    await env.user_svc.provision(username="ada", display_name="Ada")
+    await env.user_repo.rename_username("ada", "ada2")
+    assert await env.user_repo.get("ada") is None
+    assert await env.user_repo.get("ada2") is not None
+
+
+async def test_rename_username_updates_locally_owned_space_owner(env):
+    """Renaming a local space owner carries ``spaces.owner_username`` so
+    owner-authority paths keep resolving the actor after the rename."""
+    from socialhome.crypto import derive_instance_id
+
+    self_iid = derive_instance_id(env.kp.public_key)
+    await env.user_svc.provision(username="bob", display_name="Bob")
+    await env.db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES(?,?,?,?,?)",
+        ("space-1", "Bob's Space", self_iid, "bob", "ab" * 32),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    row = await env.db.fetchone(
+        "SELECT owner_username FROM spaces WHERE id=?", ("space-1",)
+    )
+    assert row["owner_username"] == "bobby"
+
+
+async def test_rename_username_leaves_remote_owned_space_untouched(env):
+    """A remote-owned space whose remote owner happens to share the local
+    username is NOT touched (scoped to our own instance)."""
+    await env.user_svc.provision(username="bob", display_name="Bob")
+    # Remote owner coincidentally also named 'bob', on a different instance.
+    await env.db.enqueue(
+        "INSERT INTO spaces(id, name, owner_instance_id, owner_username,"
+        " identity_public_key) VALUES(?,?,?,?,?)",
+        (
+            "space-remote",
+            "Remote Space",
+            "REMOTEINSTANCEID00000000000000AA",
+            "bob",
+            "cd" * 32,
+        ),
+    )
+
+    await env.user_repo.rename_username("bob", "bobby")
+
+    row = await env.db.fetchone(
+        "SELECT owner_username FROM spaces WHERE id=?", ("space-remote",)
+    )
+    assert row["owner_username"] == "bob"

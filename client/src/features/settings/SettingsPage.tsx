@@ -28,6 +28,7 @@ import {
 import { relativeDocsTime } from '@/utils/relativeTime'
 import { userPreferences } from '@/store/userPreferences'
 import { isHomeAssistant } from '@/platform'
+import { UsernameEditor } from './UsernameEditor'
 
 interface SpaceLocationRow {
   space_id: string
@@ -292,6 +293,8 @@ function ProfileTab() {
           <Button type="submit">Save profile</Button>
         </div>
       </form>
+
+      <UsernameEditor />
 
       <LandingPicker />
     </section>
