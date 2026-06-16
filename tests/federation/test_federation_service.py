@@ -2576,3 +2576,30 @@ async def test_peer_identity_public_key_unknown_peer_returns_none():
     svc = _svc_with(own_kp, InMemoryFederationRepo(), km)
     assert await svc.peer_identity_public_key("nope") is None
     assert await svc.peer_identity_public_key("") is None
+
+
+async def test_is_confirmed_peer_true_for_confirmed_instance():
+    """A CONFIRMED ``remote_instances`` row reads as a confirmed peer."""
+    own_kp = generate_identity_keypair()
+    km = _make_kek_manager()
+    repo = InMemoryFederationRepo()
+    inst, _ = _make_remote_instance(km)  # status defaults to CONFIRMED
+    repo._instances[inst.id] = inst
+    svc = _svc_with(own_kp, repo, km)
+
+    assert await svc.is_confirmed_peer(inst.id) is True
+
+
+async def test_is_confirmed_peer_false_for_pending_or_unknown():
+    """A pending/unpairing peer, an unknown peer, and an empty id all read False."""
+    own_kp = generate_identity_keypair()
+    km = _make_kek_manager()
+    repo = InMemoryFederationRepo()
+    pending, _ = _make_remote_instance(km)
+    pending = dataclasses.replace(pending, status=PairingStatus.PENDING_SENT)
+    repo._instances[pending.id] = pending
+    svc = _svc_with(own_kp, repo, km)
+
+    assert await svc.is_confirmed_peer(pending.id) is False
+    assert await svc.is_confirmed_peer("nope") is False
+    assert await svc.is_confirmed_peer("") is False

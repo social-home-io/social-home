@@ -141,9 +141,27 @@ class UserMoveService:
         return {"move_link": json.loads(link_json)}
 
     async def _on_resolve_request(self, event: FederationEvent) -> None:
-        """Reply to a resolve request with the stored link (if we hold one)."""
+        """Reply to a resolve request with the stored link (if we hold one).
+
+        Gated to CONFIRMED peers only: the §24.11 pipeline authenticates the
+        *sender*, but a merely-authenticated (or mid-pairing) peer must not be
+        able to enumerate our move destinations. A request from a peer we
+        haven't confirmed is logged and dropped without a reply. The
+        confirmed-peer check is fail-soft — any error is treated as
+        not-confirmed so we never raise out of the handler.
+        """
         fed = self._federation_service
         if fed is None:  # pragma: no cover — attach_to always runs first
+            return
+        try:
+            confirmed = await fed.is_confirmed_peer(event.from_instance)
+        except Exception:  # pragma: no cover — is_confirmed_peer is fail-soft
+            confirmed = False
+        if not confirmed:
+            log.warning(
+                "move-resolve: dropping request from non-confirmed peer %s",
+                event.from_instance,
+            )
             return
         resp = await self.handle_resolve_request(event.payload)
         if resp is None:

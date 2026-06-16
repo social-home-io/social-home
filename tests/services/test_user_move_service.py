@@ -42,7 +42,11 @@ class FakeFederationService:
         self._event_registry = EventDispatchRegistry()
         self._pinned: dict[str, bytes] = {}
         self._versions: dict[str, int] = {}
+        self._confirmed: set[str] = set()
         self.sent: list[dict] = []
+
+    async def is_confirmed_peer(self, instance_id: str) -> bool:
+        return instance_id in self._confirmed
 
     async def peer_identity_public_key(self, instance_id: str) -> bytes | None:
         return self._pinned.get(instance_id)
@@ -320,11 +324,12 @@ async def test_handle_resolve_request_returns_link_for_moved_user(env):
     assert await env.svc.handle_resolve_request({}) is None
 
 
-async def test_on_resolve_request_sends_link_back_to_sender(env):
-    """The inbound resolve handler replies to the sender with the link."""
+async def test_on_resolve_request_sends_link_back_to_confirmed_peer(env):
+    """The inbound resolve handler replies to a CONFIRMED sender with the link."""
     s = _build_scenario()
     await _seed_old_row(env, s, store_p=s["user_kp"].public_key)
     await env.fed._event_registry.dispatch(_moved_event(s))
+    env.fed._confirmed.add("asker")
 
     resolve_evt = FederationEvent(
         msg_id="r1",
@@ -343,6 +348,31 @@ async def test_on_resolve_request_sends_link_back_to_sender(env):
     assert (
         MoveLink.from_wire_dict(sent["payload"]["move_link"]).new_user_id
         == (s["new_user_id"])
+    )
+
+
+async def test_on_resolve_request_drops_non_confirmed_peer(env, caplog):
+    """A resolve request from a non-confirmed/unknown peer is dropped, no reply."""
+    s = _build_scenario()
+    await _seed_old_row(env, s, store_p=s["user_kp"].public_key)
+    await env.fed._event_registry.dispatch(_moved_event(s))
+    # "asker" is deliberately NOT in env.fed._confirmed.
+
+    resolve_evt = FederationEvent(
+        msg_id="r1",
+        event_type=FederationEventType.USER_IDENTITY_RESOLVE,
+        from_instance="asker",
+        to_instance="us",
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        payload={"old_user_id": s["old_user_id"]},
+    )
+    with caplog.at_level("WARNING"):
+        await env.fed._event_registry.dispatch(resolve_evt)
+
+    assert env.fed.sent == []
+    assert any(
+        "non-confirmed peer" in r.message and r.levelname == "WARNING"
+        for r in caplog.records
     )
 
 
