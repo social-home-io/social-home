@@ -167,6 +167,35 @@ class MeView(BaseView):
         return web.json_response(_user_to_dict_signed(self.request, user))
 
 
+class MeUsernameView(BaseView):
+    """POST /api/me/username — rename the authenticated user's login username.
+
+    Only ``manual``-source users can rename — an ``ha``-synced row's name is
+    owned by Home Assistant, so the service raises :class:`PermissionError`
+    (→ 403). The ``user_id`` / cryptographic identity is unaffected by the
+    rename (§v_26). Format / reserved / taken failures map to 422.
+    """
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        body = await self.body()
+        new = body.get("username")
+        if not isinstance(new, str) or not new.strip():
+            return error_response(422, "UNPROCESSABLE", "username is required.")
+        svc = self.svc(user_service_key)
+        try:
+            await svc.rename_username(ctx.username, new)
+        except PermissionError:
+            return error_response(
+                403,
+                "HA_CONTROLLED",
+                "Your username is managed by Home Assistant.",
+            )
+        except ValueError as exc:
+            return error_response(422, "INVALID_USERNAME", str(exc))
+        return web.json_response({"username": new.strip()})
+
+
 class MePictureView(BaseView):
     """POST + DELETE /api/me/picture — upload / clear the caller's avatar."""
 

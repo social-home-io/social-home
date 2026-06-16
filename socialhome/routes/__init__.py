@@ -368,6 +368,7 @@ from .users import (
     MeOnboardingCompleteView,
     MePictureRefreshFromHaView,
     MePictureView,
+    MeUsernameView,
     MeView,
     RedeemPasswordResetView,
     TokenCollectionView,
@@ -403,6 +404,7 @@ def setup_routes(app: web.Application) -> None:  # noqa: C901
     app.router.add_view("/api/me", MeView)
     app.router.add_view("/api/me/corner", CornerView)
     app.router.add_view("/api/me/picture", MePictureView)
+    app.router.add_view("/api/me/username", MeUsernameView)
     app.router.add_view(
         "/api/me/picture/refresh-from-ha",
         MePictureRefreshFromHaView,
