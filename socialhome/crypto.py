@@ -223,6 +223,28 @@ def validate_user_sig_suite(suite: str) -> None:
         )
 
 
+# ─── Move-out link signature suite tag (move-out link) ─────────────────────
+
+
+MOVE_LINK_SUITE_ED25519: str = "ed25519"
+SUPPORTED_MOVE_LINK_SUITES: frozenset[str] = frozenset({MOVE_LINK_SUITE_ED25519})
+
+
+class UnsupportedMoveLinkSuite(ValueError):
+    """Raised when a move-out link advertises a `suite` this build doesn't know.
+    Receivers MUST reject rather than fall back to a default (downgrade
+    protection once the Phase-2 hybrid `ed25519+mldsa65` lands). PQ migration
+    grows the frozenset + ships the parallel signature; wire shape unchanged."""
+
+
+def validate_move_link_suite(suite: str) -> None:
+    if not isinstance(suite, str) or suite not in SUPPORTED_MOVE_LINK_SUITES:
+        raise UnsupportedMoveLinkSuite(
+            f"move-link suite={suite!r} not recognised; expected one of "
+            f"{SUPPORTED_MOVE_LINK_SUITES}",
+        )
+
+
 # ─── User self-signature (independent user identity Phase 1) ───────────────
 
 
@@ -267,6 +289,64 @@ def sign_user_self(user_seed: bytes, message: bytes) -> bytes:
 
 def verify_user_self(user_public_key: bytes, message: bytes, signature: bytes) -> bool:
     return verify_ed25519(user_public_key, message, signature)
+
+
+# ─── Move-out link signed bytes (move-out link) ────────────────────────────
+
+
+def move_link_user_signed_bytes(
+    *,
+    old_user_id: str,
+    new_user_id: str,
+    user_public_key: bytes,
+    new_instance_public_key: bytes,
+    issued_at: str,
+    suite: str,
+) -> bytes:
+    """Canonical bytes the USER (``P``) signature on a move-out link covers.
+
+    Length-prefixed (4-byte big-endian length per field via ``_lv``) so a NUL
+    byte in any field can't shift field boundaries and collide two different
+    field tuples onto identical signed bytes. Committed under the
+    ``sh/move-out/user/v1`` domain tag — distinct from the release tag so the
+    two move-link signatures can never be cross-replayed."""
+    return (
+        _lv(b"sh/move-out/user/v1")
+        + _lv(old_user_id.encode("utf-8"))
+        + _lv(new_user_id.encode("utf-8"))
+        + _lv(user_public_key)
+        + _lv(new_instance_public_key)
+        + _lv(issued_at.encode("utf-8"))
+        + _lv(suite.encode("utf-8"))
+    )
+
+
+def move_link_release_signed_bytes(
+    *,
+    old_user_id: str,
+    new_user_id: str,
+    user_public_key: bytes,
+    new_instance_public_key: bytes,
+    issued_at: str,
+    suite: str,
+) -> bytes:
+    """Canonical bytes the RELEASE (old-home instance) signature covers.
+
+    Same field set / length-prefixing as
+    :func:`move_link_user_signed_bytes`, but under the distinct
+    ``sh/move-out/release/v1`` domain tag — so the release and user signatures
+    can never be cross-replayed. By committing to ``new_user_id`` +
+    ``new_instance_public_key`` it is the destination-pin: the releasing
+    household vouches for *this specific* destination."""
+    return (
+        _lv(b"sh/move-out/release/v1")
+        + _lv(old_user_id.encode("utf-8"))
+        + _lv(new_user_id.encode("utf-8"))
+        + _lv(user_public_key)
+        + _lv(new_instance_public_key)
+        + _lv(issued_at.encode("utf-8"))
+        + _lv(suite.encode("utf-8"))
+    )
 
 
 # ─── UserIdentityAssertion encoding (§4.1.4) ──────────────────────────────

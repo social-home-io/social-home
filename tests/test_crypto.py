@@ -8,10 +8,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from socialhome.crypto import (
+    MOVE_LINK_SUITE_ED25519,
     REPLAY_CACHE_WINDOW,
+    SUPPORTED_MOVE_LINK_SUITES,
     SUPPORTED_USER_SIG_SUITES,
     USER_SIG_SUITE_ED25519,
     ReplayCache,
+    UnsupportedMoveLinkSuite,
     UnsupportedUserSigSuite,
     b64url_decode,
     b64url_encode,
@@ -25,9 +28,12 @@ from socialhome.crypto import (
     random_token,
     sha256_hex,
     sign_ed25519,
+    move_link_release_signed_bytes,
+    move_link_user_signed_bytes,
     sign_user_assertion,
     sign_user_self,
     user_identity_signed_bytes,
+    validate_move_link_suite,
     validate_user_sig_suite,
     verify_ed25519,
     verify_user_identity_assertion,
@@ -728,3 +734,49 @@ def test_anchored_binding_roundtrip():
     )
     with pytest.raises(ValueError, match="self-signature"):
         verify_user_identity_assertion(user_tampered, instance_kp.public_key)
+
+
+# ─── Move-out link suite tag + signed bytes (move-out link, Task 1) ────────
+
+
+def test_move_link_suite_contract():
+    """MOVE_LINK_SUITE tag contract: ed25519 only, reject unknown suites and
+    non-strings (no TypeError leak)."""
+    assert MOVE_LINK_SUITE_ED25519 == "ed25519"
+    assert MOVE_LINK_SUITE_ED25519 in SUPPORTED_MOVE_LINK_SUITES
+    assert "ed25519+mldsa65" not in SUPPORTED_MOVE_LINK_SUITES
+    assert issubclass(UnsupportedMoveLinkSuite, ValueError)
+    assert validate_move_link_suite(MOVE_LINK_SUITE_ED25519) is None
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        validate_move_link_suite("rot13")
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        validate_move_link_suite(object())  # type: ignore[arg-type]
+
+
+def _move_link_byte_args():
+    kp = generate_identity_keypair()
+    new_kp = generate_identity_keypair()
+    return dict(
+        old_user_id="old_uid",
+        new_user_id="new_uid",
+        user_public_key=kp.public_key,
+        new_instance_public_key=new_kp.public_key,
+        issued_at="2026-06-16T00:00:00+00:00",
+        suite=MOVE_LINK_SUITE_ED25519,
+    )
+
+
+def test_move_link_release_bytes_commit_to_destination_user_id():
+    """The release signature is a destination-pin — changing only the
+    destination user_id changes the signed bytes."""
+    args = _move_link_byte_args()
+    a = move_link_release_signed_bytes(**args)
+    b = move_link_release_signed_bytes(**{**args, "new_user_id": "other_uid"})
+    assert a != b
+
+
+def test_move_link_user_and_release_bytes_differ_for_identical_params():
+    """The user and release legs use distinct domain tags so the two signatures
+    can never be cross-replayed, even over identical params."""
+    args = _move_link_byte_args()
+    assert move_link_user_signed_bytes(**args) != move_link_release_signed_bytes(**args)
