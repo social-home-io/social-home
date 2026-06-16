@@ -16,6 +16,7 @@ here so it is easy to audit. No network or database I/O.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -483,11 +484,15 @@ def verify_move_link(
         new_inst_pk = bytes.fromhex(link.new_instance_public_key)
     except ValueError as exc:
         raise MoveLinkBindingInvalid("malformed move-link key material") from exc
+    if len(link_pubkey) != 32 or len(new_inst_pk) != 32:
+        raise MoveLinkBindingInvalid("malformed move-link key material")
 
     # 3. Binding #3 — P↔old_id (the binding the receiver already stores) and the
     #    pinned old-home instance key must match the link's old_instance_id.
     if link_pubkey != stored_old_user_pubkey:
         raise MoveLinkBindingInvalid("link P does not match stored old-home P")
+    if len(old_home_pinned_pk) != 32:
+        raise MoveLinkBindingInvalid("malformed old-home pinned key")
     if derive_instance_id(old_home_pinned_pk) != link.old_instance_id:
         raise MoveLinkBindingInvalid(
             "pinned old-home key does not match link.old_instance_id"
@@ -520,6 +525,10 @@ def verify_move_link(
     new_user_id = link.new_home_assertion.user_id
 
     # 6. USER consent — the person (holding P) authorised this move.
+    try:
+        user_sig = b64url_decode(link.user_signature)
+    except (ValueError, binascii.Error) as exc:
+        raise MoveLinkUserSigInvalid("malformed user signature encoding") from exc
     if not verify_user_self(
         link_pubkey,
         move_link_user_signed_bytes(
@@ -530,13 +539,17 @@ def verify_move_link(
             issued_at=link.issued_at,
             suite=link.suite,
         ),
-        b64url_decode(link.user_signature),
+        user_sig,
     ):
         raise MoveLinkUserSigInvalid("move-link user consent signature invalid")
 
     # 7. RELEASE consent — the old home vouched for THIS destination. A release
     #    issued over a different destination won't verify against these
     #    recomputed bytes (the destination-pin).
+    try:
+        release_sig = b64url_decode(link.release_signature)
+    except (ValueError, binascii.Error) as exc:
+        raise MoveLinkReleaseSigInvalid("malformed release signature encoding") from exc
     if not verify_ed25519(
         old_home_pinned_pk,
         move_link_release_signed_bytes(
@@ -547,7 +560,7 @@ def verify_move_link(
             issued_at=link.issued_at,
             suite=link.suite,
         ),
-        b64url_decode(link.release_signature),
+        release_sig,
     ):
         raise MoveLinkReleaseSigInvalid("move-link release consent signature invalid")
 

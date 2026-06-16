@@ -858,6 +858,45 @@ def test_verify_move_link_accepts_well_formed_link():
     )
 
 
+def test_verify_move_link_wrong_length_new_instance_key_typed_error():
+    """A valid-hex but wrong-length new_instance_public_key is rejected as a
+    typed MoveLinkBindingInvalid (not a bare ValueError from derive_instance_id)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], new_instance_public_key="aa")
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_malformed_user_signature_encoding_typed_error():
+    """A malformed-base64 user_signature is rejected as a typed
+    MoveLinkUserSigInvalid (not a bare binascii.Error)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], user_signature="a")
+    with pytest.raises(MoveLinkUserSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_malformed_release_signature_encoding_typed_error():
+    """A malformed-base64 release_signature is rejected as a typed
+    MoveLinkReleaseSigInvalid (not a bare binascii.Error)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], release_signature="a")
+    with pytest.raises(MoveLinkReleaseSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
 def test_verify_move_link_forged_user_signature_rejected():
     """A tampered user_signature fails the USER-consent leg."""
     s = _build_move_scenario()
