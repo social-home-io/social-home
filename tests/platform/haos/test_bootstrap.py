@@ -222,12 +222,15 @@ async def test_provision_admin_is_username_anchored(env):
     )
 
     row = await env.db.fetchone(
-        "SELECT user_id, identity_anchor FROM users WHERE username=?",
+        "SELECT user_id, identity_anchor, handle FROM users WHERE username=?",
         ("ha_owner",),
     )
     assert row is not None
     assert row["identity_anchor"] == "ha_owner"
     assert row["user_id"] == expected_uid
+    # The public ``@handle`` seeds from the username so the row is never
+    # NULL-handle (the §public-handle editor pre-fills + lets the user save).
+    assert row["handle"] == "ha_owner"
 
     # Idempotent re-mirror: a second provision (HA-side re-poll) must leave
     # the deterministic user_id + the anchor untouched.

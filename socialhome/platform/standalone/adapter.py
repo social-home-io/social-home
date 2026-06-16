@@ -425,11 +425,11 @@ class StandaloneAdapter(PlatformAdapter):
         user_id = f"uid-{username}"
         await self._db.enqueue(
             """
-            INSERT INTO users(username, user_id, display_name, is_admin)
-            VALUES(?, ?, ?, 1)
+            INSERT INTO users(username, user_id, display_name, is_admin, handle)
+            VALUES(?, ?, ?, 1, ?)
             ON CONFLICT(username) DO UPDATE SET is_admin=1
             """,
-            (username, user_id, display_name),
+            (username, user_id, display_name, username),
         )
         return True
 

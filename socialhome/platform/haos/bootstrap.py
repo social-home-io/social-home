@@ -228,8 +228,9 @@ class HaBootstrap:
         await self._db.enqueue(
             """
             INSERT INTO users(user_id, username, display_name, is_admin,
-                              created_at, source, external_id, identity_anchor)
-            VALUES(?, ?, ?, 1, ?, 'ha', ?, ?)
+                              created_at, source, external_id, identity_anchor,
+                              handle)
+            VALUES(?, ?, ?, 1, ?, 'ha', ?, ?, ?)
             """,
             (
                 user_id,
@@ -237,6 +238,7 @@ class HaBootstrap:
                 display_name or username,
                 datetime.now(timezone.utc).isoformat(),
                 external_id,
+                username,
                 username,
             ),
         )

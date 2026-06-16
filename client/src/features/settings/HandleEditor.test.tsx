@@ -73,6 +73,21 @@ describe('HandleEditor', () => {
     expect(input.value).toBe('alice')
   })
 
+  it('pre-fills the username when the handle is still null, with Save disabled until changed', () => {
+    // Legacy/edge rows can have a null handle (provisioned before the
+    // handle-seeding fix). The editor falls back to the username so the field
+    // is never empty — the user sees their @-name and can save it. Save stays
+    // disabled until they actually change it (consistent "unchanged" logic).
+    setUser({ username: 'alice', handle: null })
+    const { getByLabelText, getByText } = render(<HandleEditor />)
+    const input = getByLabelText(/handle/i) as HTMLInputElement
+    expect(input.value).toBe('alice')
+    const btn = getByText('Save').closest('button') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.input(input, { target: { value: 'alice2' } })
+    expect(btn.disabled).toBe(false)
+  })
+
   it('disables Save when the value is unchanged', () => {
     setUser({ handle: 'alice' })
     const { getByText } = render(<HandleEditor />)

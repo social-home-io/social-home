@@ -27,7 +27,12 @@ const ERROR_ID = 'sh-handle-error'
  */
 export function HandleEditor() {
   const user = currentUser.value
-  const currentHandle = user?.handle ?? ''
+  // Seed from the handle, falling back to the username when the handle is
+  // still null (legacy/edge rows provisioned before handle-seeding). A
+  // null-handle user then sees their username pre-filled and can save it,
+  // rather than an empty field. The "unchanged" disable logic is anchored on
+  // this same seeded value so Save stays off until the user actually edits.
+  const currentHandle = user?.handle ?? user?.username ?? ''
 
   // Local edit buffer + inline error/saving state, seeded from the live
   // handle. ``useSignal`` (not a module-level signal) so the buffer is
