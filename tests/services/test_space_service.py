@@ -3477,6 +3477,92 @@ async def test_snapshot_carries_member_versions_and_roster_version(stack):
     assert roster["ru1"]["member_version"] == 5
 
 
+async def test_snapshot_mints_content_key_when_space_was_never_keyed(stack):
+    """A space shared only over a mesh route may never have minted its
+    per-space AES content key (live mesh posts use the per-route
+    SPACE_ROUTED seal, not the content key). The §D1b handoff snapshot
+    MUST mint that key before exporting it, otherwise the new member gets
+    no key — leaving them unable to decrypt space content and breaking the
+    §25.6 catch-up sync (whose exporter encrypts each chunk under it)."""
+    from socialhome.repositories.space_key_repo import SqliteSpaceKeyRepo
+    from socialhome.services.space_crypto_service import (
+        KEY_SUITE_AESGCM_256,
+        SpaceContentEncryption,
+    )
+    from socialhome.services.space_service import (
+        build_space_snapshot_for_federation,
+    )
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+
+    key_repo = SqliteSpaceKeyRepo(stack.db)
+    crypto = SpaceContentEncryption(key_repo, stack.km, own_instance_id=stack.iid)
+    # Precondition: the space has no content key at all.
+    assert await crypto.export_current_key(space.id) is None
+
+    snap = await build_space_snapshot_for_federation(
+        space,
+        space_repo=stack.space_repo,
+        remote_member_repo=None,
+        user_repo=stack.space_svc._users,
+        own_instance_id=stack.iid,
+        space_crypto_service=crypto,
+    )
+
+    # (a) The space now HAS a content key (initialise_for_space minted it).
+    exported = await crypto.export_current_key(space.id)
+    assert exported is not None
+    epoch, raw = exported
+    assert epoch == 0
+    assert len(raw) == 32  # AES-256
+
+    # (b) The snapshot carries that key with the full suite-tagged shape.
+    assert "space_content_key" in snap
+    sck = snap["space_content_key"]
+    assert sck["epoch"] == 0
+    assert sck["key_suite"] == KEY_SUITE_AESGCM_256
+    import base64
+
+    assert base64.b64decode(sck["key_base64"]) == raw
+
+
+async def test_snapshot_does_not_rotate_an_already_keyed_space(stack):
+    """An already-keyed space hands off the SAME epoch on every invite —
+    initialise_for_space is a no-op when a key exists, so we don't churn
+    the epoch (and invalidate existing members' decryptability) just
+    because a new invite snapshot was built."""
+    from socialhome.repositories.space_key_repo import SqliteSpaceKeyRepo
+    from socialhome.services.space_crypto_service import SpaceContentEncryption
+    from socialhome.services.space_service import (
+        build_space_snapshot_for_federation,
+    )
+
+    await stack.provision_user("anna")
+    space = await stack.space_svc.create_space(owner_username="anna", name="Fam")
+
+    key_repo = SqliteSpaceKeyRepo(stack.db)
+    crypto = SpaceContentEncryption(key_repo, stack.km, own_instance_id=stack.iid)
+    # Mint epoch 0, then rotate to epoch 1 so "current" is a non-zero epoch
+    # and an accidental re-mint would be visibly different.
+    await crypto.initialise_for_space(space.id)
+    n = await crypto.rotate_epoch(space.id)
+    assert n == 1
+
+    snap = await build_space_snapshot_for_federation(
+        space,
+        space_repo=stack.space_repo,
+        remote_member_repo=None,
+        user_repo=stack.space_svc._users,
+        own_instance_id=stack.iid,
+        space_crypto_service=crypto,
+    )
+
+    # No rotation: the same epoch N key is handed off, not a fresh one.
+    assert snap["space_content_key"]["epoch"] == 1
+    assert await crypto.get_current_epoch(space.id) == 1
+
+
 # ─── Delegated-admin signing-seed share — outbound (v_22) ──────────────
 
 

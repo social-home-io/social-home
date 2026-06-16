@@ -4101,6 +4101,17 @@ async def build_space_snapshot_for_federation(
     # the host on either end and already has the key. NEVER ship
     # this dict outside an encrypted federation envelope.
     if space_crypto_service is not None:
+        # Ensure the membership-gated content key exists before we try to
+        # hand it off. A space shared only over a mesh route may never have
+        # minted one (live mesh posts use the per-route SPACE_ROUTED seal,
+        # not the content key), so export_current_key would return None and
+        # the new member would get no key — leaving them unable to decrypt
+        # space content and breaking the §25.6 catch-up sync (whose exporter
+        # encrypts each chunk under this key). initialise_for_space is a
+        # no-op when a key already exists. Only the space's host reaches this
+        # builder (the §D1b invite + redeem-ACK paths), so minting under the
+        # local KEK is correct.
+        await space_crypto_service.initialise_for_space(space.id)
         key_info = await space_crypto_service.export_current_key(space.id)
         if key_info is not None:
             epoch, raw_key = key_info
