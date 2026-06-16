@@ -97,8 +97,8 @@ can neither swap in a different destination nor a different `P`.
 A move is a **durable fact**, not a freshness-bounded message, so
 `verify_move_link` runs with `max_age=None` (signatures + bindings still
 verify; only the age gate is skipped). Replay is instead defended at the store:
-`record_user_move` is **monotonic on `issued_at`** keyed by the stable
-per-user row (`old_user_id`, the immutable pubkey-derived id). A redirect whose
+`record_user_move` is **monotonic on `issued_at`** keyed by the moved user's
+`remote_users` row (`old_user_id`). A redirect whose
 `issued_at` is `<=` the one already on file raises `StaleMoveLink` and is
 dropped — a replayed older link can never resurrect a stale identity.
 
