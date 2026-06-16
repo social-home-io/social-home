@@ -81,6 +81,9 @@ async def stack(tmp_dir):
     # cross-household admin-action forward is allowed. Tests that need an
     # older host override this per-case.
     fed_svc.peer_supports = AsyncMock(return_value=True)
+    # ``accept_remote_invite`` kicks a mesh catch-up sync via this helper
+    # (no-op for a confirmed host); stub it so the ``await`` resolves.
+    fed_svc.begin_mesh_catchup_sync = AsyncMock()
     fed_repo = MagicMock()
     fed_repo.get_instance = AsyncMock(
         return_value=RemoteInstance(
