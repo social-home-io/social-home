@@ -278,6 +278,267 @@ def test_0041_backfills_identity_anchor_to_username(tmp_path):
         conn.close()
 
 
+# Tables rebuilt by 0042 to add ON UPDATE CASCADE on their users(username) /
+# platform_users(username) FK. Each maps to its username-bearing column.
+_LOCAL_CASCADE_TABLES = {
+    "presence": "username",
+    "post_drafts": "username",
+    "space_aliases": "local_username",
+    "conversation_members": "username",
+    "calendars": "owner_username",
+}
+
+
+def _seed_user(conn: sqlite3.Connection, username: str) -> None:
+    """Insert a minimal valid ``users`` row (0041 added identity_anchor)."""
+    conn.execute(
+        "INSERT INTO users (username, user_id, display_name, identity_anchor) "
+        "VALUES (?,?,?,?)",
+        (username, f"uid-{username}", username.title(), username),
+    )
+
+
+def _seed_local_children(conn: sqlite3.Connection, username: str) -> None:
+    """Insert one child row in each users(username)-FK table for ``username``."""
+    conn.execute(
+        "INSERT INTO presence (username, entity_id) VALUES (?,?)",
+        (username, "ent-1"),
+    )
+    conn.execute(
+        "INSERT INTO post_drafts (id, username, context) VALUES (?,?,?)",
+        ("draft-1", username, "household_feed"),
+    )
+    conn.execute(
+        "INSERT INTO space_aliases (space_id, local_username, alias) VALUES (?,?,?)",
+        ("sp-1", username, "Ali"),
+    )
+    conn.execute(
+        "INSERT INTO conversations (id, type) VALUES (?,?)",
+        ("conv-1", "dm"),
+    )
+    conn.execute(
+        "INSERT INTO conversation_members (conversation_id, username) VALUES (?,?)",
+        ("conv-1", username),
+    )
+    conn.execute(
+        "INSERT INTO calendars (id, name, owner_username) VALUES (?,?,?)",
+        ("cal-1", "Mine", username),
+    )
+
+
+@pytest.mark.asyncio
+async def test_0042_username_rename_cascades(tmp_path):
+    """Migration 0042 rebuilds every users(username)/platform_users(username)-FK
+    child table with ON UPDATE CASCADE, so renaming the parent username
+    propagates to every child row (the point of a mutable username)."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    conn = db._conn  # the live, FK-enforcing migration connection
+
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    _seed_user(conn, "alice")
+    _seed_local_children(conn, "alice")
+    # platform_tokens hangs off platform_users(username), renamed separately.
+    conn.execute(
+        "INSERT INTO platform_users (username, display_name) VALUES (?,?)",
+        ("palice", "PAlice"),
+    )
+    conn.execute(
+        "INSERT INTO platform_tokens (token_id, username, token_hash) VALUES (?,?,?)",
+        ("tok-1", "palice", "hash-1"),
+    )
+
+    conn.execute("UPDATE users SET username='alice2' WHERE username='alice'")
+    conn.execute("UPDATE platform_users SET username='palice2' WHERE username='palice'")
+
+    for table, col in _LOCAL_CASCADE_TABLES.items():
+        new = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {col}='alice2'"  # noqa: S608
+        ).fetchone()[0]
+        old = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {col}='alice'"  # noqa: S608
+        ).fetchone()[0]
+        assert new == 1, f"{table}.{col} did not cascade the rename"
+        assert old == 0, f"{table}.{col} still holds the old username"
+
+    pt_new = conn.execute(
+        "SELECT COUNT(*) FROM platform_tokens WHERE username='palice2'"
+    ).fetchone()[0]
+    pt_old = conn.execute(
+        "SELECT COUNT(*) FROM platform_tokens WHERE username='palice'"
+    ).fetchone()[0]
+    assert pt_new == 1, "platform_tokens.username did not cascade the rename"
+    assert pt_old == 0, "platform_tokens.username still holds the old username"
+
+    await db.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_0042_preserves_data(tmp_path):
+    """The 0042 rebuild changes only the FK clause — every rebuilt table keeps
+    its full column set (a dropped/renamed column would silently break the
+    services that read these rows)."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    conn = db._conn
+
+    expected_cols = {
+        "presence": {
+            "username",
+            "entity_id",
+            "state",
+            "zone_name",
+            "latitude",
+            "longitude",
+            "gps_accuracy_m",
+            "updated_at",
+        },
+        "post_drafts": {
+            "id",
+            "username",
+            "context",
+            "type",
+            "content",
+            "media_url",
+            "updated_at",
+        },
+        "space_aliases": {"space_id", "local_username", "alias", "updated_at"},
+        "conversation_members": {
+            "conversation_id",
+            "username",
+            "joined_at",
+            "last_read_at",
+            "history_visible_from",
+            "deleted_at",
+        },
+        "calendars": {"id", "name", "color", "owner_username", "calendar_type"},
+        "platform_tokens": {
+            "token_id",
+            "username",
+            "token_hash",
+            "created_at",
+            "expires_at",
+            "last_used_at",
+        },
+    }
+    for table, cols in expected_cols.items():
+        actual = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert actual == cols, (
+            f"{table} column set drifted after rebuild: "
+            f"missing {cols - actual}, extra {actual - cols}"
+        )
+
+    await db.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_0042_on_delete_still_cascades(tmp_path):
+    """The rebuild must preserve the pre-existing ON DELETE CASCADE: deleting
+    the parent user still purges its child rows (0042 only ADDS ON UPDATE)."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    conn = db._conn
+
+    _seed_user(conn, "bob")
+    _seed_local_children(conn, "bob")
+    conn.execute(
+        "INSERT INTO platform_users (username, display_name) VALUES (?,?)",
+        ("pbob", "PBob"),
+    )
+    conn.execute(
+        "INSERT INTO platform_tokens (token_id, username, token_hash) VALUES (?,?,?)",
+        ("tok-b", "pbob", "hash-b"),
+    )
+
+    conn.execute("DELETE FROM users WHERE username='bob'")
+    conn.execute("DELETE FROM platform_users WHERE username='pbob'")
+
+    for table, col in _LOCAL_CASCADE_TABLES.items():
+        remaining = conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {col}='bob'"  # noqa: S608
+        ).fetchone()[0]
+        assert remaining == 0, f"{table}.{col} did not ON DELETE CASCADE"
+
+    pt_remaining = conn.execute(
+        "SELECT COUNT(*) FROM platform_tokens WHERE username='pbob'"
+    ).fetchone()[0]
+    assert pt_remaining == 0, "platform_tokens did not ON DELETE CASCADE"
+
+    await db.shutdown()
+
+
+def test_0042_rebuild_preserves_calendar_with_existing_event(tmp_path):
+    """``calendars`` is a *parent* of ``calendar_events`` — its rebuild drops &
+    recreates the table while a child row points at it. Applying 0042
+    incrementally (after seeding a calendar + event under the old schema) proves
+    the row copy preserves the calendar, the dependent event survives, and FK
+    enforcement is back ON with no dangling reference after the migration."""
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        all_migrations = discover_migrations(MIGRATIONS_DIR)
+        pre = [m for m in all_migrations if m.version < 42]
+        the_0042 = [m for m in all_migrations if m.version == 42]
+        assert the_0042, "migration 0042 not found"
+
+        _ensure_schema_version_for_test(conn)
+        for migration in pre:
+            with conn:
+                migration.apply(conn)
+
+        _seed_user(conn, "carol")
+        conn.execute(
+            "INSERT INTO calendars (id, name, owner_username) VALUES (?,?,?)",
+            ("cal-c", "Carol", "carol"),
+        )
+        conn.execute(
+            "INSERT INTO calendar_events "
+            "(id, calendar_id, summary, start_dt, end_dt, created_by) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                "evt-c",
+                "cal-c",
+                "Lunch",
+                "2026-01-01T12:00",
+                "2026-01-01T13:00",
+                "uid-carol",
+            ),
+        )
+        conn.commit()
+
+        with conn:
+            the_0042[0].apply(conn)
+
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert (
+            conn.execute("SELECT COUNT(*) FROM calendars WHERE id='cal-c'").fetchone()[
+                0
+            ]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT calendar_id FROM calendar_events WHERE id='evt-c'"
+            ).fetchone()["calendar_id"]
+            == "cal-c"
+        )
+
+        # And the new ON UPDATE CASCADE now propagates a rename to the event-
+        # bearing calendar's owner.
+        conn.execute("UPDATE users SET username='carol2' WHERE username='carol'")
+        assert (
+            conn.execute(
+                "SELECT owner_username FROM calendars WHERE id='cal-c'"
+            ).fetchone()["owner_username"]
+            == "carol2"
+        )
+    finally:
+        conn.close()
+
+
 def _ensure_schema_version_for_test(conn: sqlite3.Connection) -> None:
     """Create the schema_version stamp table the runner relies on (the
     incremental backfill test applies migrations without run_migrations)."""
