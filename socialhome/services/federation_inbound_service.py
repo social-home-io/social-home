@@ -2445,6 +2445,12 @@ class FederationInboundService:
                     exc,
                 )
 
+        # ``handle`` is unsigned public display metadata (like display_name /
+        # picture) — older peers omit it. Pass None through when absent so the
+        # repo's COALESCE leaves any previously-cached handle untouched rather
+        # than nulling it on a non-handle profile edit.
+        raw_handle = payload.get("handle")
+        handle = str(raw_handle) if raw_handle else None
         remote = RemoteUser(
             user_id=user_id,
             instance_id=instance_id,
@@ -2453,6 +2459,7 @@ class FederationInboundService:
             picture_hash=picture_hash,
             bio=payload.get("bio"),
             public_key=payload.get("public_key"),
+            handle=handle,
             synced_at=_now_iso(),
         )
         await self._user_repo.upsert_remote(remote)

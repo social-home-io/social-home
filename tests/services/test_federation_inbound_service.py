@@ -1745,6 +1745,82 @@ async def test_users_sync_binding_skipped_when_federation_unattached(db, bus):
     assert row["user_identity_public_key"] is None
 
 
+async def test_user_updated_stores_handle(db, bus):
+    """A ``USER_UPDATED`` payload carrying ``handle='bobby'`` lands the handle
+    on the user's ``remote_users`` row (single row, keyed by user_id)."""
+    await _seed_peer(db, "peer-a", "ab" * 32)
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    await service._on_user_updated(
+        _event(
+            FederationEventType.USER_UPDATED,
+            {
+                "user_id": "u-h1",
+                "username": "bob",
+                "display_name": "Bob",
+                "handle": "bobby",
+            },
+            from_instance="peer-a",
+        )
+    )
+    rows = await db.fetchall(
+        "SELECT user_id, handle FROM remote_users WHERE user_id=?",
+        ("u-h1",),
+    )
+    assert len(rows) == 1
+    assert rows[0]["handle"] == "bobby"
+
+
+async def test_user_updated_without_handle_does_not_null_existing(db, bus):
+    """An older-peer ``USER_UPDATED`` (no ``handle`` field) must not overwrite a
+    previously-stored handle to NULL — the handle is sticky display metadata."""
+    await _seed_peer(db, "peer-a", "ab" * 32)
+    service = FederationInboundService(
+        bus=bus,
+        conversation_repo=SqliteConversationRepo(db),
+        space_post_repo=SqliteSpacePostRepo(db),
+        space_repo=SqliteSpaceRepo(db),
+        user_repo=SqliteUserRepo(db),
+    )
+    # First a handle-bearing update lands the handle.
+    await service._on_user_updated(
+        _event(
+            FederationEventType.USER_UPDATED,
+            {
+                "user_id": "u-h2",
+                "username": "bob",
+                "display_name": "Bob",
+                "handle": "bobby",
+            },
+            from_instance="peer-a",
+        )
+    )
+    # Then an older-peer update with NO handle field arrives (e.g. a bio edit).
+    await service._on_user_updated(
+        _event(
+            FederationEventType.USER_UPDATED,
+            {
+                "user_id": "u-h2",
+                "username": "bob",
+                "display_name": "Bob Smith",
+                "bio": "updated",
+            },
+            from_instance="peer-a",
+        )
+    )
+    row = await db.fetchone(
+        "SELECT handle, display_name FROM remote_users WHERE user_id=?",
+        ("u-h2",),
+    )
+    assert row["handle"] == "bobby"  # untouched, not nulled
+    assert row["display_name"] == "Bob Smith"  # other fields still update
+
+
 async def test_users_sync_binding_skipped_when_sender_key_unknown(db, bus, caplog):
     """A binding from a sender whose pinned key can't be resolved is rejected
     fail-soft with a WARNING; the legacy row is still upserted."""

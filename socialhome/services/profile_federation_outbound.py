@@ -84,12 +84,23 @@ class ProfileFederationOutbound(
         self._bus.subscribe(UserProfileUpdated, self._on_updated)
 
     async def _on_updated(self, event: UserProfileUpdated) -> None:
+        # The public @handle rides USER_UPDATED as unsigned display metadata,
+        # exactly like ``display_name``. Most ``UserProfileUpdated`` publishers
+        # (display_name/bio/picture edits, renames) leave ``event.handle`` None
+        # even when the user has a handle, so back-fill it from the user row —
+        # otherwise a non-handle edit would clobber the peer's cached handle.
+        handle = event.handle
+        if handle is None and self._user_repo is not None:
+            user = await self._user_repo.get_by_user_id(event.user_id)
+            if user is not None:
+                handle = user.handle
         payload: dict = {
             "user_id": event.user_id,
             "username": event.username,
             "display_name": event.display_name,
             "bio": event.bio,
             "picture_hash": event.picture_hash,
+            "handle": handle,
         }
         if event.picture_webp is not None:
             payload["picture_webp_base64"] = base64.b64encode(

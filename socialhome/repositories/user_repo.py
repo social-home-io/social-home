@@ -510,13 +510,18 @@ class SqliteUserRepo:
         # if they re-publish the profile, we trust they want the user
         # visible again (e.g. peer-user-visibility flipped from hidden
         # back to visible).
+        # ``handle`` is unsigned display metadata mirrored from the peer's
+        # USER_UPDATED — an older peer omits it, in which case ``remote.handle``
+        # is None and we must NOT clobber a previously-cached handle. The
+        # ``COALESCE(excluded.handle, handle)`` keeps the stored value sticky
+        # across a non-handle profile edit (bio/display_name/picture).
         await self._db.enqueue(
             """
             INSERT INTO remote_users(
                 user_id, instance_id, remote_username, display_name, alias,
                 visible_to, picture_hash, bio, status_json,
-                public_key, public_key_version, synced_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
+                public_key, public_key_version, handle, synced_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,COALESCE(?, datetime('now')))
             ON CONFLICT(user_id) DO UPDATE SET
                 instance_id=excluded.instance_id,
                 remote_username=excluded.remote_username,
@@ -528,6 +533,7 @@ class SqliteUserRepo:
                 status_json=excluded.status_json,
                 public_key=excluded.public_key,
                 public_key_version=excluded.public_key_version,
+                handle=COALESCE(excluded.handle, handle),
                 synced_at=excluded.synced_at,
                 deprovisioned_at=NULL
             """,
@@ -543,6 +549,7 @@ class SqliteUserRepo:
                 remote.status_json,
                 remote.public_key,
                 remote.public_key_version,
+                remote.handle,
                 remote.synced_at,
             ),
         )
@@ -878,5 +885,6 @@ def _row_to_remote_user(row: dict | None) -> RemoteUser | None:
         public_key=row.get("public_key"),
         public_key_version=int(row.get("public_key_version") or 0),
         synced_at=row.get("synced_at"),
+        handle=row.get("handle"),
         deprovisioned_at=row.get("deprovisioned_at"),
     )

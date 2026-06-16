@@ -11,7 +11,7 @@ happened to touch their profile) in :file:`/friends`.
 Payload mirrors what the existing ``USER_UPDATED`` outbound
 (:mod:`socialhome.services.profile_federation_outbound`) ships, just
 batched: ``{users: [{user_id, username, display_name, bio,
-picture_hash, picture_webp_base64?}, ...]}``. The inbound handler
+picture_hash, handle, picture_webp_base64?}, ...]}``. The inbound handler
 (:meth:`FederationInboundService._on_users_sync`) iterates the list
 and upserts each row via the same ``_upsert_remote_user`` path that
 ``USER_UPDATED`` uses, so the receiver code is unchanged.
@@ -100,6 +100,10 @@ class UsersSyncOutbound(VisibilityMixin):
                 "display_name": u.display_name,
                 "bio": u.bio,
                 "picture_hash": u.picture_hash,
+                # Unsigned public @handle — same shape USER_UPDATED ships, so
+                # the bootstrap sync at pairing lands the handle on the peer's
+                # remote_users row without waiting for a later profile edit.
+                "handle": u.handle,
             }
             # Per-user identity binding (proto v_25) — present only for a
             # peer that can validate it; older peers keep the legacy shape.
