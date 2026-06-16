@@ -1901,7 +1901,16 @@ class FederationService:
             )
             return
 
-        if decision.accepted and not bool(payload.get("prefer_direct")):
+        # A requester reachable only via the mesh (not a CONFIRMED direct
+        # peer) cannot complete the WebRTC handshake — ICE can't traverse a
+        # relay — so force HTTPS/event-chunk mode regardless of what
+        # prefer_direct says. The RTC offer below would otherwise go out over
+        # direct send_event and never reach a mesh-only peer.
+        requester_is_mesh = not await self.is_confirmed_peer(event.from_instance)
+
+        if decision.accepted and (
+            requester_is_mesh or not bool(payload.get("prefer_direct"))
+        ):
             # Relay-mode sync (Part C). ``prefer_direct=False`` arrives
             # either because the requester hit a 15 s ICE timeout and
             # called ``trigger_relay_sync``, or because they know
@@ -1925,7 +1934,11 @@ class FederationService:
                     )
             return
 
-        if decision.accepted and bool(payload.get("prefer_direct")):
+        if (
+            decision.accepted
+            and not requester_is_mesh
+            and bool(payload.get("prefer_direct"))
+        ):
             # Build SDP offer, send SPACE_SYNC_OFFER back over relay.
             record = self._sync_manager.get_session(sync_id)
             if record is not None and record.rtc is not None:

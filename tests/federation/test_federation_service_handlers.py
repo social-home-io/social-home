@@ -271,11 +271,19 @@ async def test_handle_space_sync_begin_offer_includes_signaling_node(svc):
     svc._gfs_connection_service.request_signaling_node = AsyncMock(
         return_value="https://b.gfs.test",
     )
-    with patch.object(
-        FederationService,
-        "send_event",
-        new_callable=AsyncMock,
-    ) as send_mock:
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
         await svc._handle_space_sync_begin(
             _event(
                 "SPACE_SYNC_BEGIN",
@@ -309,11 +317,19 @@ async def test_handle_space_sync_begin_offer_omits_signaling_node_when_null(svc)
     svc._sync_manager.get_session = MagicMock(return_value=record)
     svc._gfs_connection_service = MagicMock()
     svc._gfs_connection_service.request_signaling_node = AsyncMock(return_value=None)
-    with patch.object(
-        FederationService,
-        "send_event",
-        new_callable=AsyncMock,
-    ) as send_mock:
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
         await svc._handle_space_sync_begin(
             _event(
                 "SPACE_SYNC_BEGIN",
@@ -345,11 +361,19 @@ async def test_handle_space_sync_begin_no_gfs_service_no_signaling_node(svc):
     )
     svc._sync_manager.get_session = MagicMock(return_value=record)
     # _gfs_connection_service stays None.
-    with patch.object(
-        FederationService,
-        "send_event",
-        new_callable=AsyncMock,
-    ) as send_mock:
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
         await svc._handle_space_sync_begin(
             _event(
                 "SPACE_SYNC_BEGIN",
@@ -444,6 +468,151 @@ async def test_handle_space_sync_begin_rejected_silent_for_sub_v20_peer(svc):
                 space_id="sp",
             ),
         )
+    send_mock.assert_not_awaited()
+
+
+async def test_handle_space_sync_begin_mesh_requester_forced_https(svc):
+    """A mesh-only (non-confirmed) requester is forced to HTTPS mode
+    even when its BEGIN says ``prefer_direct=True`` — WebRTC ICE can't
+    traverse a relay, so the host streams chunks over SPACE_SYNC_CHUNK
+    instead of an RTC offer it could never deliver."""
+    record = SimpleNamespace(
+        sync_id="m1",
+        rtc=None,
+        transport_mode="rtc",
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.begin_session = AsyncMock(
+        return_value=SimpleNamespace(
+            accepted=True,
+            next_event=None,
+            next_payload=None,
+        ),
+    )
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._space_sync_service = MagicMock()
+    svc._space_sync_service.stream_initial = AsyncMock()
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
+        await svc._handle_space_sync_begin(
+            _event(
+                "SPACE_SYNC_BEGIN",
+                {
+                    "sync_id": "m1",
+                    "space_id": "sp",
+                    "sync_mode": "initial",
+                    "prefer_direct": True,
+                },
+                space_id="sp",
+            ),
+        )
+        await asyncio.sleep(0)
+    assert record.transport_mode == "https"
+    svc._space_sync_service.stream_initial.assert_awaited_once_with(record)
+    # No RTC offer is sent to a peer that can't complete the handshake.
+    send_mock.assert_not_awaited()
+
+
+async def test_handle_space_sync_begin_confirmed_prefer_direct_uses_rtc(svc):
+    """A CONFIRMED direct peer with ``prefer_direct=True`` still takes
+    the RTC path — an SDP offer is built and SPACE_SYNC_OFFER is sent."""
+    record = SimpleNamespace(signaling_node=None)
+    record.rtc = SimpleNamespace(create_offer=AsyncMock(return_value="sdp-x"))
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.begin_session = AsyncMock(
+        return_value=SimpleNamespace(
+            accepted=True,
+            next_event=None,
+            next_payload=None,
+        ),
+    )
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
+        await svc._handle_space_sync_begin(
+            _event(
+                "SPACE_SYNC_BEGIN",
+                {
+                    "sync_id": "c1",
+                    "space_id": "sp",
+                    "sync_mode": "initial",
+                    "prefer_direct": True,
+                },
+                space_id="sp",
+            ),
+        )
+    record.rtc.create_offer.assert_awaited_once()
+    send_mock.assert_awaited_once()
+    assert (
+        send_mock.await_args.kwargs["event_type"]
+        is FederationEventType.SPACE_SYNC_OFFER
+    )
+
+
+async def test_handle_space_sync_begin_confirmed_no_prefer_direct_uses_https(svc):
+    """A CONFIRMED direct peer with ``prefer_direct=False`` still uses
+    HTTPS mode (unchanged behaviour — the requester asked for relay)."""
+    record = SimpleNamespace(
+        sync_id="c2",
+        rtc=None,
+        transport_mode="rtc",
+    )
+    svc._sync_manager = MagicMock()
+    svc._sync_manager.begin_session = AsyncMock(
+        return_value=SimpleNamespace(
+            accepted=True,
+            next_event=None,
+            next_payload=None,
+        ),
+    )
+    svc._sync_manager.get_session = MagicMock(return_value=record)
+    svc._space_sync_service = MagicMock()
+    svc._space_sync_service.stream_initial = AsyncMock()
+    with (
+        patch.object(
+            FederationService,
+            "is_confirmed_peer",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch.object(
+            FederationService,
+            "send_event",
+            new_callable=AsyncMock,
+        ) as send_mock,
+    ):
+        await svc._handle_space_sync_begin(
+            _event(
+                "SPACE_SYNC_BEGIN",
+                {"sync_id": "c2", "space_id": "sp", "sync_mode": "initial"},
+                space_id="sp",
+            ),
+        )
+        await asyncio.sleep(0)
+    assert record.transport_mode == "https"
+    svc._space_sync_service.stream_initial.assert_awaited_once_with(record)
     send_mock.assert_not_awaited()
 
 
