@@ -12,12 +12,12 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
-def test_ours_is_v25_with_user_identity_key_capability():
-    """v_25 introduces the per-user identity binding on USERS_SYNC /
-    USER_UPDATED (v_24 added admin-authoritative offline config edits, v_23
-    peer-replicated space roster gossip, v_22 the delegated-admin signing-seed
-    share, v_21 authenticated mesh route discovery, v_20 SPACE_SYNC_REJECTED)."""
-    assert OURS == 25
+def test_ours_is_v26_with_identity_anchor_capability():
+    """v_26 introduces the identity_anchor field anchoring user_id derivation
+    (v_25 added per-user identity binding, v_24 added admin-authoritative offline
+    config edits, v_23 peer-replicated space roster gossip, v_22 the delegated-admin
+    signing-seed share, v_21 authenticated mesh route discovery, v_20 SPACE_SYNC_REJECTED)."""
+    assert OURS == 26
     assert FederationCapability.MIN_FOR_INSTANCE_RESYNC == 19
     assert FederationCapability.MIN_FOR_SPACE_SYNC_REJECTED == 20
     assert FederationCapability.MIN_FOR_AUTHENTICATED_ROUTE_DISCOVERY == 21
@@ -25,6 +25,7 @@ def test_ours_is_v25_with_user_identity_key_capability():
     assert FederationCapability.MIN_FOR_SPACE_ROSTER_GOSSIP == 23
     assert FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS == 24
     assert FederationCapability.MIN_FOR_USER_IDENTITY_KEY == 25
+    assert FederationCapability.MIN_FOR_IDENTITY_ANCHOR == 26
     assert (
         FederationCapability.MIN_FOR_ADMIN_AUTHORITATIVE_OPS,
         "Admin authoritative config offline",
@@ -32,6 +33,10 @@ def test_ours_is_v25_with_user_identity_key_capability():
     assert (
         FederationCapability.MIN_FOR_USER_IDENTITY_KEY,
         "Per-user identity binding",
+    ) in CAPABILITY_FEATURES
+    assert (
+        FederationCapability.MIN_FOR_IDENTITY_ANCHOR,
+        "UUID identity anchor",
     ) in CAPABILITY_FEATURES
 
 
@@ -138,7 +143,8 @@ def test_space_features_missing_below_v23():
 
 
 def test_space_features_missing_below_v24_is_empty():
-    """Nothing space-scoped lives above v24 — a v24 member lacks none."""
+    """Nothing space-scoped lives above v24 — a v24 member lacks none.
+    (v_26 identity_anchor is per-user, not space-scoped.)"""
     assert space_features_missing_below(24) == []
 
 

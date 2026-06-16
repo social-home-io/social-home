@@ -206,6 +206,9 @@ class SpacePostOutbound:
                     author_pk=self._own_instance_pk,
                     author_identity_seed=self._own_identity_seed,
                     origin_instance_id=self._own_instance_id,
+                    # Carry the immutable uuid anchor so a seed-holding relay's
+                    # self-cert survives a later username change; None for legacy.
+                    author_identity_anchor=author.identity_anchor,
                 )
         try:
             await self._federation.broadcast_to_space_members(

@@ -233,6 +233,7 @@ def user_identity_signed_bytes(
     username: str,
     user_public_key: bytes,
     user_sig_suite: str,
+    identity_anchor: str | None = None,
 ) -> bytes:
     """Canonical bytes the USER self-signature covers. Length-prefixed (4-byte
     big-endian length per field via ``_lv``), mirroring
@@ -240,8 +241,14 @@ def user_identity_signed_bytes(
     not charset-restricted) cannot shift field boundaries and collide two
     different field tuples onto identical signed bytes. Binds user_id, instance,
     username, user pubkey, suite, under the ``sh/user-identity/v1`` domain
-    prefix."""
-    return (
+    prefix.
+
+    When ``identity_anchor`` is present, the bytes are **extended** with the
+    anchor under a distinct ``identity-anchor`` domain tag so the user self-sig
+    commits to the anchor too. The ``_lv``-prefixed tag can't collide with the
+    legacy tail (whose final field is the suite value), so the absent-anchor
+    case stays byte-identical to today (legacy compat)."""
+    base = (
         _lv(b"sh/user-identity/v1")
         + _lv(user_id.encode("utf-8"))
         + _lv(instance_id.encode("utf-8"))
@@ -249,6 +256,9 @@ def user_identity_signed_bytes(
         + _lv(user_public_key)
         + _lv(user_sig_suite.encode("utf-8"))
     )
+    if identity_anchor is None:
+        return base
+    return base + _lv(b"identity-anchor") + _lv(identity_anchor.encode("utf-8"))
 
 
 def sign_user_self(user_seed: bytes, message: bytes) -> bytes:
@@ -298,37 +308,45 @@ def instance_assertion_signed_bytes(
     issued_at: str,
     user_identity_public_key: bytes | None,
     user_sig_suite: str | None,
+    identity_anchor: str | None = None,
 ) -> bytes:
     """Bytes the INSTANCE signature covers.
 
-    For a legacy assertion (no user binding) this is **exactly** the legacy
-    :func:`user_assertion_signed_bytes` — byte-for-byte backward compatible
-    with existing v24 assertions.
+    For a legacy assertion (no user binding, no anchor) this is **exactly** the
+    legacy :func:`user_assertion_signed_bytes` — byte-for-byte backward
+    compatible with existing v24 assertions.
 
     For a binding-bearing assertion (``user_identity_public_key`` present) the
     legacy bytes are **extended** with the user pubkey + suite under a
     ``user-binding`` domain separator, so the household vouches for the
     *specific* user key. This closes the transplant flaw: an attacker who
     swaps in their own user pubkey can no longer re-use the victim's instance
-    signature, because that signature now commits to the user key. The
-    ``_lv``-prefixed domain tag can't collide with the legacy tail (whose
-    final field is the ``issued_at`` value), so the extension is unambiguous.
+    signature, because that signature now commits to the user key.
+
+    When ``identity_anchor`` is present it is appended under a distinct
+    ``identity-anchor`` domain tag so the instance signature also commits to
+    the anchor ``user_id`` derives from — a swapped anchor breaks the instance
+    sig, not just the verifier's derivation check. Both ``_lv``-prefixed domain
+    tags can't collide with the legacy tail (whose final field is the
+    ``issued_at`` value) nor with each other, so the extensions are unambiguous
+    and the absent-both case stays byte-identical to the legacy bytes.
     """
-    legacy = user_assertion_signed_bytes(
+    out = user_assertion_signed_bytes(
         user_id,
         instance_id,
         username,
         display_name,
         issued_at,
     )
-    if user_identity_public_key is None:
-        return legacy
-    return (
-        legacy
-        + _lv(b"user-binding")
-        + _lv(user_identity_public_key)
-        + _lv((user_sig_suite or USER_SIG_SUITE_ED25519).encode("utf-8"))
-    )
+    if user_identity_public_key is not None:
+        out += (
+            _lv(b"user-binding")
+            + _lv(user_identity_public_key)
+            + _lv((user_sig_suite or USER_SIG_SUITE_ED25519).encode("utf-8"))
+        )
+    if identity_anchor is not None:
+        out += _lv(b"identity-anchor") + _lv(identity_anchor.encode("utf-8"))
+    return out
 
 
 def sign_user_assertion(
@@ -341,13 +359,15 @@ def sign_user_assertion(
     issued_at: str,
     user_identity_public_key: bytes | None = None,
     user_sig_suite: str | None = None,
+    identity_anchor: str | None = None,
 ) -> str:
     """Produce the base64url Ed25519 INSTANCE signature for a user identity
     assertion.
 
     When ``user_identity_public_key`` is supplied the signed bytes are extended
     to commit to the user binding (see :func:`instance_assertion_signed_bytes`);
-    otherwise the legacy bytes are signed verbatim.
+    when ``identity_anchor`` is supplied they are also extended to commit to the
+    anchor. Otherwise the legacy bytes are signed verbatim.
     """
     payload = instance_assertion_signed_bytes(
         user_id=user_id,
@@ -357,6 +377,7 @@ def sign_user_assertion(
         issued_at=issued_at,
         user_identity_public_key=user_identity_public_key,
         user_sig_suite=user_sig_suite,
+        identity_anchor=identity_anchor,
     )
     return b64url_encode(sign_ed25519(seed, payload))
 
@@ -375,6 +396,7 @@ def build_user_identity_assertion(
     user_seed: bytes | None = None,
     user_public_key: bytes | None = None,
     user_sig_suite: str = USER_SIG_SUITE_ED25519,
+    identity_anchor: str | None = None,
 ) -> UserIdentityAssertion:
     """Build a signed :class:`UserIdentityAssertion`.
 
@@ -401,6 +423,7 @@ def build_user_identity_assertion(
             username=username,
             user_public_key=user_public_key,
             user_sig_suite=user_sig_suite,
+            identity_anchor=identity_anchor,
         )
         user_signature = b64url_encode(sign_user_self(user_seed, body))
 
@@ -416,6 +439,7 @@ def build_user_identity_assertion(
         issued_at=issued_at,
         user_identity_public_key=binding_pubkey,
         user_sig_suite=suite,
+        identity_anchor=identity_anchor,
     )
 
     return UserIdentityAssertion(
@@ -432,6 +456,7 @@ def build_user_identity_assertion(
         user_pq_public_key=None,  # reserved for the Phase-2 PQ hybrid
         user_sig_suite=suite,
         user_signature=user_signature,
+        identity_anchor=identity_anchor,
     )
 
 
@@ -464,9 +489,17 @@ def verify_user_identity_assertion(
     if assertion.instance_id != expected_instance_id:
         raise ValueError("instance_id does not match sender public key")
 
-    expected_user_id = derive_user_id(sender_instance_public_key, assertion.username)
-    if assertion.user_id != expected_user_id:
-        raise ValueError("user_id does not match instance public key + username")
+    # ``user_id`` derives from the immutable ``identity_anchor`` (uuid for new
+    # users) when present, else falls back to ``username`` for legacy rows.
+    derivation_input = (
+        assertion.identity_anchor
+        if assertion.identity_anchor is not None
+        else assertion.username
+    )
+    if assertion.user_id != derive_user_id(
+        sender_instance_public_key, derivation_input
+    ):
+        raise ValueError("user_id does not match instance public key + identity anchor")
 
     # Parse + validate the per-user identity binding up front (when present) so
     # the INSTANCE signature can be verified over bytes that COMMIT to the user
@@ -497,6 +530,7 @@ def verify_user_identity_assertion(
         issued_at=assertion.issued_at,
         user_identity_public_key=user_pubkey,
         user_sig_suite=suite,
+        identity_anchor=assertion.identity_anchor,
     )
     if not verify_ed25519(
         sender_instance_public_key,
@@ -514,6 +548,7 @@ def verify_user_identity_assertion(
             username=assertion.username,
             user_public_key=user_pubkey,
             user_sig_suite=suite or USER_SIG_SUITE_ED25519,
+            identity_anchor=assertion.identity_anchor,
         )
         if not verify_user_self(
             user_pubkey,

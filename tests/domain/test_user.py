@@ -80,3 +80,19 @@ def test_user_identity_assertion_user_binding_fields_default_none():
     assert a.user_pq_public_key is None
     assert a.user_sig_suite is None
     assert a.user_signature is None
+    assert a.identity_anchor is None
+
+
+def test_user_identity_assertion_carries_identity_anchor():
+    """The optional ``identity_anchor`` field is settable and defaults None so
+    legacy payloads still construct."""
+    a = UserIdentityAssertion(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-01-01T00:00:00+00:00",
+        signature="sig",
+        identity_anchor="deadbeef",
+    )
+    assert a.identity_anchor == "deadbeef"

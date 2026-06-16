@@ -47,6 +47,7 @@ class AbstractUserRepo(Protocol):
         self,
         username: str,
     ) -> tuple[bytes, bytes] | None: ...
+    async def get_user_identity_anchor(self, username: str) -> str | None: ...
     async def soft_delete(self, username: str, grace_days: int = 30) -> None: ...
 
     # Remote users --------------------------------------------------------
@@ -62,6 +63,7 @@ class AbstractUserRepo(Protocol):
         user_id: str,
         *,
         public_key_hex: str,
+        identity_anchor: str | None = None,
     ) -> None: ...
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]: ...
     async def list_all_known_remote(self) -> list[RemoteUser]: ...
@@ -174,7 +176,8 @@ class SqliteUserRepo:
                 public_key, public_key_version, is_new_member,
                 preferences_json, tz, email, phone, date_of_birth,
                 declared_age, is_minor, child_protection_enabled,
-                deleted_at, grace_until, created_at, source, external_id
+                deleted_at, grace_until, created_at, source, external_id,
+                identity_anchor
             ) VALUES(
                 ?,?,?,?,?,?,
                 ?,?,?,?,
@@ -182,7 +185,8 @@ class SqliteUserRepo:
                 ?,?,?,
                 ?,?,?,?,?,
                 ?,?,?,
-                ?,?,COALESCE(?, datetime('now')), ?, ?
+                ?,?,COALESCE(?, datetime('now')), ?, ?,
+                ?
             )
             ON CONFLICT(username) DO UPDATE SET
                 display_name=excluded.display_name,
@@ -210,7 +214,8 @@ class SqliteUserRepo:
                 deleted_at=excluded.deleted_at,
                 grace_until=excluded.grace_until,
                 source=excluded.source,
-                external_id=excluded.external_id
+                external_id=excluded.external_id,
+                identity_anchor=excluded.identity_anchor
             """,
             (
                 user.username,
@@ -242,6 +247,7 @@ class SqliteUserRepo:
                 user.created_at,
                 user.source,
                 user.external_id,
+                user.identity_anchor,
             ),
         )
         return user
@@ -344,6 +350,25 @@ class SqliteUserRepo:
         private_seed = self._kek.decrypt(wrapped)
         return public_key, private_seed
 
+    async def get_user_identity_anchor(self, username: str) -> str | None:
+        """Return the local user's immutable ``identity_anchor`` (uuid).
+
+        The anchor is the derivation input for ``user_id`` for new users
+        (``derive_user_id(own_instance_pk, identity_anchor)``); migration 0041
+        backfilled it to the username for pre-existing rows. Returns ``None``
+        when the username is unknown or the column is NULL (an early-boot row
+        the backfill hasn't reached). No KEK needed — the anchor is a public,
+        non-secret value carried on the wire in the v_26 user binding.
+        """
+        row = await self._db.fetchone(
+            "SELECT identity_anchor FROM users WHERE username=?",
+            (username,),
+        )
+        if row is None:
+            return None
+        anchor = row["identity_anchor"]
+        return str(anchor) if anchor is not None else None
+
     async def soft_delete(self, username: str, grace_days: int = 30) -> None:
         now = datetime.now(timezone.utc).isoformat()
         grace = datetime.now(timezone.utc).timestamp() + grace_days * 86400
@@ -431,6 +456,7 @@ class SqliteUserRepo:
         user_id: str,
         *,
         public_key_hex: str,
+        identity_anchor: str | None = None,
     ) -> None:
         """Persist a remote user's *verified* per-user identity public key.
 
@@ -442,10 +468,24 @@ class SqliteUserRepo:
         previously-verified key, and a failed verification leaves the existing
         key intact. ``public_key_hex`` is the hex-encoded 32-byte Ed25519
         user public key.
+
+        ``identity_anchor`` (proto v_26) is the immutable uuid the verifier
+        used to derive ``user_id``; it is persisted alongside the key so a
+        later rename can be tracked by anchor rather than username. ``None``
+        (a v_25 binding, or no anchor on the wire) leaves the column unchanged
+        so a v_26 anchor already on file isn't clobbered by a later v_25
+        re-publish.
         """
+        if identity_anchor is None:
+            await self._db.enqueue(
+                "UPDATE remote_users SET user_identity_public_key=? WHERE user_id=?",
+                (public_key_hex, user_id),
+            )
+            return
         await self._db.enqueue(
-            "UPDATE remote_users SET user_identity_public_key=? WHERE user_id=?",
-            (public_key_hex, user_id),
+            "UPDATE remote_users "
+            "SET user_identity_public_key=?, identity_anchor=? WHERE user_id=?",
+            (public_key_hex, identity_anchor, user_id),
         )
 
     async def list_remote_for_instance(self, instance_id: str) -> list[RemoteUser]:
@@ -721,6 +761,7 @@ def _row_to_user(row: dict | None) -> User | None:
         last_seen_at=row.get("last_seen_at"),
         source=row.get("source", "manual"),
         external_id=row.get("external_id"),
+        identity_anchor=row.get("identity_anchor"),
     )
 
 

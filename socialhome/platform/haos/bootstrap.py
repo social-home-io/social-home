@@ -147,13 +147,18 @@ class HaBootstrap:
                 "ha_bootstrap: instance_identity not initialised before bootstrap"
             )
         pk_bytes = bytes.fromhex(identity["identity_public_key"])
+        # HAOS owners are username-anchored (not uuid-anchored like
+        # standalone users): the bootstrap re-mirrors HA persons on every
+        # boot, so the derived user_id must stay deterministic + stable
+        # across re-runs. identity_anchor == username keeps it legacy-style
+        # (works on all peers) and ensures the column is never NULL.
         user_id = derive_user_id(pk_bytes, username)
 
         await self._db.enqueue(
             """
             INSERT INTO users(user_id, username, display_name, is_admin,
-                              created_at, source, external_id)
-            VALUES(?, ?, ?, 1, ?, 'ha', ?)
+                              created_at, source, external_id, identity_anchor)
+            VALUES(?, ?, ?, 1, ?, 'ha', ?, ?)
             """,
             (
                 user_id,
@@ -161,6 +166,7 @@ class HaBootstrap:
                 display_name or username,
                 datetime.now(timezone.utc).isoformat(),
                 external_id,
+                username,
             ),
         )
 

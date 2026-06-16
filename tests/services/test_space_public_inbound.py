@@ -110,6 +110,7 @@ async def _make_envelope(
     author_sign_seed: bytes | None = None,
     omit_author_sig: bool = False,
     space_seed: bytes | None = None,
+    identity_anchor: str | None = None,
 ):
     """Build a relayed envelope.
 
@@ -137,6 +138,8 @@ async def _make_envelope(
         "created_at": datetime(2026, 6, 10, tzinfo=timezone.utc).isoformat(),
         "origin_instance_id": "remote.home",
     }
+    if identity_anchor is not None:
+        inner["identity_anchor"] = identity_anchor
     if not omit_author_sig:
         inner["author_sig"] = b64url_encode(
             sign_ed25519(sign_seed, author_signing_bytes(inner))
@@ -211,6 +214,41 @@ async def test_author_self_cert_mismatch_dropped(env):
     # Sign correctly with the space seed, but the inner author_pk is the
     # impostor's key while author_user_id stays the real bob.
     envelope = await _make_envelope(env, author_pk=impostor.public_key)
+    await env["inbound"].handle(_frame(envelope), gfs_id="g1")
+    assert await env["post_repo"].get("post-1") is None
+    assert env["events"] == []
+
+
+async def test_anchor_derived_author_accepted(env):
+    """An author whose ``author_user_id`` derives from a uuid ``identity_anchor``
+    (NOT the username) is accepted when the anchor is carried + signed."""
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    author_kp = env["author_kp"]
+    anchored_user_id = derive_user_id(author_kp.public_key, anchor)
+    # Sanity: username derivation would NOT yield this id.
+    assert derive_user_id(author_kp.public_key, "bob") != anchored_user_id
+    envelope = await _make_envelope(
+        env, author_user_id=anchored_user_id, identity_anchor=anchor
+    )
+    await env["inbound"].handle(_frame(envelope), gfs_id="g1")
+    got = await env["post_repo"].get("post-1")
+    assert got is not None
+    _space_id, post = got
+    assert post.author == anchored_user_id
+    assert len(env["events"]) == 1
+
+
+async def test_forged_anchor_dropped(env):
+    """A wrong ``identity_anchor`` (user_id no longer derives from it) → drop.
+    The anchor is part of the signed bytes, so author_sig also breaks."""
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    author_kp = env["author_kp"]
+    anchored_user_id = derive_user_id(author_kp.public_key, anchor)
+    envelope = await _make_envelope(
+        env,
+        author_user_id=anchored_user_id,
+        identity_anchor="ffffffffffffffffffffffffffffffff",
+    )
     await env["inbound"].handle(_frame(envelope), gfs_id="g1")
     assert await env["post_repo"].get("post-1") is None
     assert env["events"] == []

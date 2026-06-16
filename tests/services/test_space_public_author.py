@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from socialhome.crypto import (
@@ -39,8 +40,78 @@ def _inner(**over) -> dict:
     return base
 
 
+#: The EXACT field set the pre-change (v_25) code signed over — frozen here as
+#: a regression anchor. ``identity_anchor`` is intentionally NOT in this tuple;
+#: a legacy (no-anchor) author MUST sign byte-identical bytes to this layout so
+#: a not-yet-upgraded v_25 subscriber/relay (no proto negotiation on the GFS
+#: public path) still verifies their posts during rollout.
+_V25_SIGNED_FIELDS: tuple[str, ...] = (
+    "post_id",
+    "space_id",
+    "author_user_id",
+    "author_pk",
+    "author_username",
+    "type",
+    "content",
+    "media_url",
+    "image_urls",
+    "created_at",
+    "location",
+    "origin_instance_id",
+    "hidden_from_feed",
+)
+
+
+def _v25_author_signing_bytes(inner: dict) -> bytes:
+    """Reproduce the pre-change (v_25) signing-bytes construction exactly:
+    every field in :data:`_V25_SIGNED_FIELDS` defaulted to ``None``, compact
+    sorted JSON, same domain prefix — NO ``identity_anchor`` key."""
+    body = {k: inner.get(k) for k in _V25_SIGNED_FIELDS}
+    canonical = json.dumps(body, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return b"space-post-author:v1:" + canonical
+
+
 def test_domain_separated_prefix():
     assert author_signing_bytes(_inner()).startswith(b"space-post-author:v1:")
+
+
+def test_legacy_no_anchor_bytes_identical_to_v25_layout():
+    """REGRESSION (cross-version rollout): a legacy author with no
+    ``identity_anchor`` must produce author-signing-bytes byte-for-byte equal
+    to the pre-change v_25 layout — otherwise a not-yet-upgraded subscriber
+    recomputes the OLD bytes, the author sig mismatches, and the (legacy,
+    username-anchored) public post is silently dropped.
+
+    Holds whether the anchor key is absent entirely or present-but-None."""
+    base = _inner()
+    assert author_signing_bytes(base) == _v25_author_signing_bytes(base)
+    assert author_signing_bytes(_inner(identity_anchor=None)) == (
+        _v25_author_signing_bytes(base)
+    )
+
+
+def test_legacy_signed_inner_has_no_anchor_key_and_verifies_under_v25():
+    """A legacy (no-anchor) signed inner built by the NEW code carries NO
+    ``identity_anchor`` key, and its ``author_sig`` verifies against the v_25
+    signing-bytes layout (proving a sub-v_26 receiver accepts it)."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, username)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=None,
+    )
+    assert "identity_anchor" not in inner
+    # A v_25 verifier (old field set, no anchor) accepts the sig.
+    assert verify_ed25519(
+        kp.public_key,
+        _v25_author_signing_bytes(inner),
+        b64url_decode(inner["author_sig"]),
+    )
 
 
 def test_author_sig_excluded_from_signed_bytes():
@@ -210,6 +281,105 @@ def test_verify_signed_author_inner_rejects_wrong_signing_key():
 
 def test_verify_signed_author_inner_fail_closed_on_non_dict():
     assert verify_signed_author_inner({}) is False
+
+
+def test_identity_anchor_derivation_accepted():
+    """A public author whose ``author_user_id`` derives from a uuid
+    ``identity_anchor`` (NOT the username) is accepted — the anchor is the
+    derivation input when present."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"  # uuid4 hex, != username
+    # user_id derives from the ANCHOR, not the username.
+    user_id = derive_user_id(kp.public_key, anchor)
+    inner = build_signed_author_inner(
+        post=_post(author=user_id),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    assert inner["identity_anchor"] == anchor
+    # Username-derivation would NOT match this user_id (proves the anchor is
+    # genuinely the derivation input, not the username).
+    assert derive_user_id(kp.public_key, username) != user_id
+    assert verify_signed_author_inner(inner) is True
+
+
+def test_legacy_no_anchor_still_uses_username_derivation():
+    """Without an ``identity_anchor`` (legacy), username-derivation applies:
+    a user_id that doesn't derive from the username is rejected."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    # Legacy: user_id derives from the username, no anchor on the block.
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, username)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=None,
+    )
+    # The key is OMITTED entirely (not present-but-None) so the signed bytes
+    # match the pre-change v_25 layout.
+    assert "identity_anchor" not in inner
+    assert verify_signed_author_inner(inner) is True
+    # A username-derivation MISMATCH (no anchor) is rejected.
+    bad = dict(inner)
+    bad["author_user_id"] = "not-the-right-id"
+    assert verify_signed_author_inner(bad) is False
+
+
+def test_forged_identity_anchor_rejected():
+    """A swapped ``identity_anchor`` (user_id no longer derives from it) is
+    rejected — and because the anchor is signed, the author_sig also breaks."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    user_id = derive_user_id(kp.public_key, anchor)
+    inner = build_signed_author_inner(
+        post=_post(author=user_id),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    assert verify_signed_author_inner(inner) is True
+    # Forge the anchor — user_id no longer derives from it.
+    inner["identity_anchor"] = "ffffffffffffffffffffffffffffffff"
+    assert verify_signed_author_inner(inner) is False
+
+
+def test_identity_anchor_is_signed_and_roundtrips():
+    """``identity_anchor`` is bound to the author signature so a relayer cannot
+    strip or swap it undetectably."""
+    kp = generate_identity_keypair()
+    username = "bob"
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    inner = build_signed_author_inner(
+        post=_post(author=derive_user_id(kp.public_key, anchor)),
+        space_id="sp",
+        author_username=username,
+        author_pk=kp.public_key,
+        author_identity_seed=kp.private_key,
+        origin_instance_id="origin.home",
+        author_identity_anchor=anchor,
+    )
+    # The anchor is part of the signed bytes.
+    assert author_signing_bytes(_inner(identity_anchor=anchor)) != author_signing_bytes(
+        _inner(identity_anchor="different")
+    )
+    # Round-trips with the anchor signed.
+    assert verify_signed_author_inner(inner) is True
+    # Stripping the anchor after signing breaks verification (sig was over it).
+    stripped = dict(inner)
+    stripped.pop("identity_anchor")
+    assert verify_signed_author_inner(stripped) is False
 
 
 def test_hidden_from_feed_is_signed_and_roundtrips():

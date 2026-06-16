@@ -103,7 +103,10 @@ vouching (they don't hold the instance seed).
 Verification, in order (`verify_user_identity_assertion`):
 
 - `instance_id` matches `derive_instance_id(sender_instance_pk)`;
-- `user_id` matches `derive_user_id(sender_instance_pk, username)`;
+- `user_id` matches `derive_user_id(sender_instance_pk, identity_anchor)`
+  when the binding carries an `identity_anchor`, else
+  `derive_user_id(sender_instance_pk, username)` for a legacy / sub-v_26
+  binding (see *Identity anchor* below);
 - the suite is in `SUPPORTED_USER_SIG_SUITES` (a present-but-unknown
   suite raises `UnsupportedUserSigSuite` — **no default fallback**); a
   first-revision payload that omits `user_sig_suite` defaults to
@@ -111,6 +114,53 @@ Verification, in order (`verify_user_identity_assertion`):
 - the **instance** signature verifies over the extended bytes;
 - the **user** self-signature verifies against `user_identity_public_key`;
 - `issued_at` is within ±24 h (not expired, not future-dated).
+
+## Identity anchor (v_26)
+
+Phase 2 anchors the `user_id` derivation to an immutable per-user
+`identity_anchor` instead of the (mutable) human username:
+
+    user_id = derive_user_id(instance_pk, identity_anchor)
+
+- **New standalone users** get a uuid4 `identity_anchor` (`uuid.uuid4().hex`)
+  minted **once** at provision and **frozen** thereafter — a later rename
+  leaves `user_id` stable. The anchor is set at the provision site in
+  `socialhome/services/user_service.py` and must never be mutated.
+- **Existing users** (migrated) and **haos** users have
+  `identity_anchor == username`, so their `user_id` is byte-for-byte the
+  legacy `derive_user_id(instance_pk, username)` — no churn for any account
+  that predates v_26.
+
+The binding carries the anchor on the wire as the `identity_anchor` field,
+and it is committed to by **both** signatures: the **instance** signature
+(via the extended `instance_assertion_signed_bytes` tail) and the **user**
+self-signature (via `user_identity_signed_bytes`). A receiver therefore
+re-derives `user_id` from the signed anchor — an attacker can neither swap
+the anchor nor reuse the signature against a different one.
+
+`verify_user_identity_assertion` derives the expected `user_id` from
+`assertion.identity_anchor` when present, else falls back to
+`assertion.username`. A **first-revision / sub-v_26 binding omits the field**
+(`identity_anchor is None`) and verifies exactly as before against the
+username — the documented migration tripwire.
+
+The `identity_anchor` field is gated on
+`FederationCapability.MIN_FOR_IDENTITY_ANCHOR` (v_26): emitted **only** to a
+peer advertising v_26, computed per-peer.
+
+**Migration tail.** A user provisioned **before** v_26 has
+`identity_anchor == username`, so their `user_id` is identical everywhere
+and their binding verifies on peers of **any** version. A **uuid-anchored**
+user created **after** v_26 has a `user_id` that no longer equals
+`derive_user_id(pk, username)`; their binding only verifies on a **v_26+
+peer** that receives and re-derives from the `identity_anchor`. The sender
+gates the anchor field on `MIN_FOR_IDENTITY_ANCHOR`, so a sub-v_26 peer
+receives the Phase-1 (anchor-free) binding whose signed bytes commit to no
+anchor; that peer derives `user_id` from the username, which for a
+uuid-anchored user **won't match** the asserted `user_id`, so the binding is
+rejected **fail-soft** (legacy user row still mirrors via `upsert_remote` —
+only the per-user identity key is unavailable until the older peer
+upgrades). Existing username-anchored users are unaffected on every peer.
 
 ## Flow
 
@@ -194,12 +244,22 @@ comment at the store site in
   `set_remote_user_identity_key` (store verified remote pubkey).
 - Migration `0040_user_identity_keys.sql` — the new `users` /
   `remote_users` columns.
+- Migration `0041_user_identity_anchor.sql` — the `users.identity_anchor`
+  column (uuid for new users, backfilled to `= username` for existing rows;
+  `remote_users.identity_anchor` mirrors a verified remote anchor).
+- `socialhome/services/user_service.py` — mints the immutable uuid4
+  `identity_anchor` once at provision and derives `user_id` from it.
+- `socialhome/crypto.py` — `derive_user_id` / `user_identity_signed_bytes`
+  / `instance_assertion_signed_bytes` / `verify_user_identity_assertion`
+  all take the optional `identity_anchor` (committed into both signatures;
+  drives the `user_id`-derivation check, falling back to `username`).
 - `socialhome/domain/federation_capabilities.py` —
-  `FederationCapability.MIN_FOR_USER_IDENTITY_KEY` (v_25).
+  `FederationCapability.MIN_FOR_USER_IDENTITY_KEY` (v_25) and
+  `MIN_FOR_IDENTITY_ANCHOR` (v_26).
 
 ## Spec references
 
 §4.1 (identity model), §4.1.4 (`UserIdentityAssertion`),
 §25.8 (post-quantum migration — the Phase-2 hybrid `ed25519+mldsa65`
 user suite). Capability history: [`capabilities.md`](./capabilities.md)
-v_25.
+v_25 (per-user binding) and v_26 (uuid identity anchor).

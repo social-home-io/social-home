@@ -68,7 +68,7 @@ class User:
     anything to a client.
     """
 
-    user_id: str  # derive_user_id(own_instance_pk, username)
+    user_id: str  # derive_user_id(own_instance_pk, identity_anchor)
     username: str  # local username; primary key
     display_name: str
     is_admin: bool = False
@@ -139,6 +139,15 @@ class User:
     # join via ``person.attributes.user_id`` without re-resolving the
     # username. ``None`` for ``source='manual'``.
     external_id: str | None = None
+
+    # Immutable per-user UUID (uuid4 hex) that ``user_id`` derives from
+    # (``derive_user_id(own_instance_pk, identity_anchor)``), freeing the
+    # cryptographic id from the mutable username (§v_26). New users get a
+    # fresh uuid4 at provision; existing rows were backfilled to their
+    # username by migration 0041 so their ``user_id`` stays stable.
+    # Defaulted ``None`` so the many other ``User`` call sites that don't
+    # set it (reads from older code paths, test fixtures) still construct.
+    identity_anchor: str | None = None
 
     def is_active(self) -> bool:
         return self.state == "active" and self.deleted_at is None
@@ -249,6 +258,16 @@ class UserIdentityAssertion:
     user_pq_public_key: str | None = None  # hex; reserved for PQ (None in P1)
     user_sig_suite: str | None = None  # e.g. "ed25519"
     user_signature: str | None = None  # base64url USER self-signature
+
+    # Immutable per-user anchor (uuid4 hex for new users, username for legacy
+    # rows) that ``user_id`` derives from — ``derive_user_id(instance_pk,
+    # identity_anchor)``. When present it is the derivation input the verifier
+    # checks ``user_id`` against (else it falls back to ``username`` for legacy
+    # compat) and BOTH signatures (instance + user self-sig) commit to it under
+    # the ``identity-anchor`` domain tag, so a swapped anchor breaks the sigs,
+    # not just the derivation check. Defaults ``None`` so legacy / first-
+    # revision payloads that omit it still parse with byte-identical signatures.
+    identity_anchor: str | None = None
 
 
 @dataclass(slots=True, frozen=True)

@@ -29,6 +29,7 @@ from socialhome.crypto import (
 from socialhome.services.space_public_author import (
     author_signing_bytes,
     build_signed_author_inner,
+    verify_signed_author_inner,
 )
 from socialhome.db.database import AsyncDatabase
 from socialhome.domain.events import SpacePostCreated
@@ -420,3 +421,35 @@ async def test_calendar_event_post_not_relayed(env):
     )
     await env["bus"].publish(SpacePostCreated(post=post, space_id="sp-cal"))
     assert env["gfs"].calls == []
+
+
+async def test_anchor_authored_post_carries_signed_anchor(env):
+    """A local author whose ``user_id`` derives from a uuid ``identity_anchor``
+    (not the username) relays an inner that carries the anchor, and the inner
+    self-certifies via the anchor (the subscriber-side check accepts it)."""
+    db = env["db"]
+    # Insert a local user whose user_id derives from a uuid anchor, NOT username.
+    anchor = "2f3c9d1e4b5a6789abcdef0123456789"
+    anchored_user_id = derive_user_id(env["own_pk"], anchor)
+    await db.enqueue(
+        "INSERT INTO users(user_id, username, display_name, state, identity_anchor) "
+        "VALUES(?, 'carol', 'Carol', 'active', ?)",
+        (anchored_user_id, anchor),
+    )
+    skp = await env["make_space"]("sp-anchor", SpaceType.PUBLIC, with_seed=True)
+    await env["bus"].publish(
+        SpacePostCreated(post=_post(anchored_user_id), space_id="sp-anchor")
+    )
+    assert len(env["gfs"].calls) == 1
+    envelope = env["gfs"].calls[0]["payload"]
+    pt = await env["crypto"].decrypt(
+        "sp-anchor", envelope["epoch"], envelope["encrypted_payload"]
+    )
+    inner = json.loads(pt)
+    assert inner["identity_anchor"] == anchor
+    assert inner["author_user_id"] == anchored_user_id
+    # The relayed inner self-certifies via the anchor — username derivation
+    # would NOT match, proving the anchor is the derivation input on the wire.
+    assert derive_user_id(env["own_pk"], "carol") != anchored_user_id
+    assert verify_signed_author_inner(inner) is True
+    _ = skp

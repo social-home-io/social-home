@@ -34,6 +34,15 @@ the legacy payload. The binding is also skipped when the user has no minted
 identity key (an early-boot row the startup backfill hasn't reached yet) or
 when no ``user_repo`` is wired to fetch the keypair.
 
+A v_26 peer (:data:`FederationCapability.MIN_FOR_IDENTITY_ANCHOR`)
+additionally gets the immutable ``identity_anchor`` (the uuid the receiver
+derives ``user_id`` from). The anchor is baked into both signatures of the
+assertion, so it is shipped **only** to v_26+ peers — a v_25 peer would
+verify the assertion against the username-derived ``user_id`` and so must get
+the anchor-free binding whose signatures commit to no anchor. Including the
+anchor is therefore gated on its own ``peer_supports`` check, nested inside
+the v_25 binding gate.
+
 Both outbound services call :func:`user_identity_binding_fields` so the gate,
 the key-handling and the suite stay in one place.
 """
@@ -102,6 +111,28 @@ async def user_identity_binding_fields(
         return {}
     user_public_key, user_seed = keypair
 
+    # The immutable anchor (uuid) is the v_26 addition. We only put it on the
+    # wire for a peer that advertises v_26 (MIN_FOR_IDENTITY_ANCHOR) — a v_25
+    # peer can't derive user_id from the anchor, so it gets the Phase-1 binding
+    # WITHOUT the anchor (and the assertion it reconstructs falls back to the
+    # username for user_id derivation, exactly as in Phase 1). The anchor must
+    # nonetheless be baked into BOTH signatures here so a v_26 receiver's
+    # verify — which commits the anchor into the signed bytes — passes.
+    identity_anchor: str | None = None
+    if await federation_service.peer_supports(
+        peer_instance_id,
+        min_version=FederationCapability.MIN_FOR_IDENTITY_ANCHOR,
+    ):
+        try:
+            identity_anchor = await user_repo.get_user_identity_anchor(username)
+        except Exception as exc:  # pragma: no cover — defensive, fail-soft
+            log.warning(
+                "user-identity-binding: anchor lookup for %s failed: %s",
+                username,
+                exc,
+            )
+            identity_anchor = None
+
     issued_at = datetime.now(timezone.utc).isoformat()
     assertion = build_user_identity_assertion(
         instance_seed=federation_service.own_identity_seed,
@@ -114,6 +145,7 @@ async def user_identity_binding_fields(
         user_seed=user_seed,
         user_public_key=user_public_key,
         user_sig_suite=USER_SIG_SUITE_ED25519,
+        identity_anchor=identity_anchor,
     )
     if (
         assertion.user_identity_public_key is None
@@ -121,7 +153,7 @@ async def user_identity_binding_fields(
         or assertion.user_signature is None
     ):  # pragma: no cover — both halves were supplied, so always present
         return {}
-    return {
+    fields = {
         "user_identity_public_key": assertion.user_identity_public_key,
         "user_sig_suite": assertion.user_sig_suite,
         "user_signature": assertion.user_signature,
@@ -133,3 +165,8 @@ async def user_identity_binding_fields(
         "user_assertion_signature": assertion.signature,
         "user_assertion_issued_at": assertion.issued_at,
     }
+    # v_26: ship the anchor only to peers that support it. A v_25 peer gets the
+    # Phase-1 binding above with no ``identity_anchor`` key on the wire.
+    if identity_anchor is not None:
+        fields["identity_anchor"] = identity_anchor
+    return fields

@@ -6,7 +6,11 @@ import os
 
 import pytest
 
-from socialhome.crypto import derive_instance_id, generate_identity_keypair
+from socialhome.crypto import (
+    derive_instance_id,
+    derive_user_id,
+    generate_identity_keypair,
+)
 from socialhome.db.database import AsyncDatabase
 from socialhome.platform.haos.bootstrap import (
     BOOTSTRAP_FLAG,
@@ -185,6 +189,68 @@ async def test_provision_admin_idempotent(env):
         ("ha_owner",),
     )
     assert refreshed["external_id"] == "ha-id-2"
+
+
+async def test_provision_admin_is_username_anchored(env):
+    """HAOS owners are username-anchored: ``identity_anchor == username`` and
+    ``user_id == derive_user_id(pk, username)``. Unlike a standalone uuid
+    anchor, this keeps the deterministic ``user_id`` stable across the
+    idempotent re-mirroring the bootstrap does on every boot (legacy-style,
+    works on all peers).
+    """
+    bs = _make_bootstrap(env)
+    expected_uid = derive_user_id(env.kp.public_key, "ha_owner")
+
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-1",
+    )
+
+    row = await env.db.fetchone(
+        "SELECT user_id, identity_anchor FROM users WHERE username=?",
+        ("ha_owner",),
+    )
+    assert row is not None
+    assert row["identity_anchor"] == "ha_owner"
+    assert row["user_id"] == expected_uid
+
+    # Idempotent re-mirror: a second provision (HA-side re-poll) must leave
+    # the deterministic user_id + the anchor untouched.
+    await bs._provision_admin(
+        username="ha_owner",
+        display_name="HA Owner",
+        external_id="ha-id-2",
+    )
+    again = await env.db.fetchone(
+        "SELECT user_id, identity_anchor FROM users WHERE username=?",
+        ("ha_owner",),
+    )
+    assert again["user_id"] == expected_uid
+    assert again["identity_anchor"] == "ha_owner"
+
+
+async def test_run_user_is_username_anchored_across_reruns(env):
+    """End-to-end: running bootstrap twice leaves user_id + identity_anchor
+    unchanged (the bootstrap re-runs the mirror on every boot)."""
+    users = _FakeUsers(owner_username="ha_admin")
+    expected_uid = derive_user_id(env.kp.public_key, "ha_admin")
+
+    await _make_bootstrap(env, users=users).run()
+    first = await env.db.fetchone(
+        "SELECT user_id, identity_anchor FROM users WHERE username=?",
+        ("ha_admin",),
+    )
+    assert first["identity_anchor"] == "ha_admin"
+    assert first["user_id"] == expected_uid
+
+    await _make_bootstrap(env, users=users).run()
+    second = await env.db.fetchone(
+        "SELECT user_id, identity_anchor FROM users WHERE username=?",
+        ("ha_admin",),
+    )
+    assert second["user_id"] == first["user_id"]
+    assert second["identity_anchor"] == first["identity_anchor"]
 
 
 async def test_config_flag_helpers(env):

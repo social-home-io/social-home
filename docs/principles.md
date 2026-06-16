@@ -21,21 +21,30 @@ exist:
 - The **instance** key is the household's transport + trust root: it
   signs every federation envelope and anchors pairing.
 - Each user **also** has their **own** Ed25519 keypair (independent user
-  identity, **Phase 1** — capability v_25). The private seed is
-  KEK-wrapped and never federates; the public half plus a dual-signed
-  binding (the household vouches for the specific key, the user proves
-  possession) rides the existing user roster (`USERS_SYNC` /
-  `USER_UPDATED`).
+  identity, **Phase 1** — capability v_25; **Phase 2** — the immutable
+  `identity_anchor` at v_26). The private seed is KEK-wrapped and never
+  federates; the public half plus a dual-signed binding (the household
+  vouches for the specific key, the user proves possession) rides the
+  existing user roster (`USERS_SYNC` / `USER_UPDATED`).
 
-**In Phase 1 the legacy `user_id`
-(`derive_user_id(home_instance_pk, username)`) stays canonical.** The
-per-user key is a *soft alias* — additive, behaviour-neutral metadata; it
-does not yet replace `user_id` for addressing, display, or routing. Later
-phases make the user identity portable (a rename away from the
-instance-derived id, and member move-out). Any change that makes the
-per-user key *authoritative* over `user_id` — or relaxes the dual-sig /
-sender-pinned-key verification — is a §2 identity-model change that needs
-explicit reviewer sign-off. See
+**`user_id` is anchored to an opaque per-user value, not the human name
+(Phase 2 — capability v_26).** For a user created on v_26+ (standalone),
+`user_id = derive_user_id(home_instance_pk, identity_anchor)` where
+`identity_anchor` is an immutable uuid4 minted once at provision — so the
+identifier is bound to an opaque value, **not** the mutable human name, and
+a rename never re-keys the user. **Existing users keep their
+username-derived id**: their `identity_anchor` is frozen to `= username`
+(haos users likewise), so `user_id` is byte-for-byte the legacy value and
+nothing about pre-v_26 accounts churns. The anchor is committed into both
+signatures of the user binding; a sub-v_26 peer falls back to the
+username-derived id. The per-user **key** remains a *soft alias* — additive,
+behaviour-neutral metadata that does not replace `user_id` for addressing,
+display, or routing. The remaining roadmap intent is later-phase: make the
+user identity fully portable (mutable login + `@handle`, member move-out).
+Any change that makes the per-user key *authoritative* over `user_id` —
+relaxes the dual-sig / sender-pinned-key verification, or changes how the
+`identity_anchor` derives `user_id` — is a §2 identity-model change that
+needs explicit reviewer sign-off. See
 [`protocol/user-identity.md`](protocol/user-identity.md).
 
 ## Encryption-first (§25.8.21)
