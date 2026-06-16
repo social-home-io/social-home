@@ -4840,3 +4840,59 @@ async def test_update_space_rejects_unknown_category(stack):
     )
     with pytest.raises(ValueError):
         await stack.space_svc.update_config(s.id, actor_username="a", category="banana")
+
+
+async def test_accept_remote_invite_kicks_mesh_catchup_sync(stack):
+    """Accepting a cross-household invite seats the local membership AND
+    kicks a §25.6 mesh catch-up sync at the host so a mesh-only joiner
+    pulls the space's historical content (the SpaceSyncScheduler never
+    fires for a non-confirmed host)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from socialhome.domain.space import JoinMode, Space, SpaceFeatures, SpaceType
+
+    host_instance = "h" * 32
+    space_id = "sp-mesh-catchup"
+    user = await stack.provision_user("zoe")
+
+    # Stub the remote space row (what PrivateSpaceInviteHandler creates).
+    await stack.space_repo.save(
+        Space(
+            id=space_id,
+            name="Remote Family",
+            owner_instance_id=host_instance,
+            owner_username="remote-owner",
+            identity_public_key="ab" * 32,
+            config_sequence=1,
+            features=SpaceFeatures(),
+            space_type=SpaceType.PRIVATE,
+            join_mode=JoinMode.INVITE_ONLY,
+        )
+    )
+    # Persist the inbound cross-household invitation.
+    await stack.space_repo.save_remote_invitation(
+        space_id,
+        invited_by="remote-owner",
+        remote_instance_id=host_instance,
+        remote_user_id=user.user_id,
+        invite_token="tok-mesh-catchup",
+    )
+
+    fed = MagicMock()
+    fed._own_instance_id = stack.iid
+    fed.send_with_mesh_fallback = AsyncMock(
+        return_value=MagicMock(ok=True, error=None),
+    )
+    fed.begin_mesh_catchup_sync = AsyncMock()
+    stack.space_svc._federation = fed
+    stack.space_svc._federation_repo = MagicMock()
+
+    await stack.space_svc.accept_remote_invite(
+        token="tok-mesh-catchup",
+        user_id=user.user_id,
+    )
+
+    fed.begin_mesh_catchup_sync.assert_awaited_once_with(
+        space_id=space_id,
+        host_instance_id=host_instance,
+    )

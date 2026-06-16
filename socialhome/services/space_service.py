@@ -2759,6 +2759,15 @@ class SpaceService(SpaceMemberGuardMixin):
             invite["space_id"],
             host_instance,
         )
+        # Kick a §25.6 catch-up so we pull the space's historical posts /
+        # gallery / media from the host. When the host is reachable only via the
+        # mesh (not a confirmed direct peer), the SpaceSyncScheduler never
+        # triggers — so initiate it explicitly here. No-op + fail-soft for a
+        # confirmed host or an unwired sync stack.
+        await self._federation.begin_mesh_catchup_sync(
+            space_id=invite["space_id"],
+            host_instance_id=host_instance,
+        )
         # §D1b — seat the local membership row pointing at the stub
         # spaces row that was created when SPACE_PRIVATE_INVITE
         # arrived (see ``PrivateSpaceInviteHandler._on_invite``).
