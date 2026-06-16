@@ -71,6 +71,8 @@ class FederationEventType(str, enum.Enum):
     USER_UPDATED = "user_updated"
     USER_REMOVED = "user_removed"
     USER_STATUS_UPDATED = "user_status_updated"
+    USER_MOVED = "user_moved"
+    USER_IDENTITY_RESOLVE = "user_identity_resolve"
 
     # ── Space structural ──
     SPACE_CREATED = "space_created"

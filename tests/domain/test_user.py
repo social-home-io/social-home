@@ -96,3 +96,40 @@ def test_user_identity_assertion_carries_identity_anchor():
         identity_anchor="deadbeef",
     )
     assert a.identity_anchor == "deadbeef"
+
+
+def test_user_identity_assertion_wire_roundtrip_full_field_set():
+    """``to_wire_dict``/``from_wire_dict`` round-trip every field of a
+    binding-bearing assertion (the full set used by the federation inbound
+    ``_store_user_identity_binding`` path)."""
+    a = UserIdentityAssertion(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-01-01T00:00:00+00:00",
+        signature="instance-sig",
+        picture_hash="abc123",
+        public_key="ecdh-pk",
+        public_key_version=3,
+        user_identity_public_key="deadbeefuserpk",
+        user_pq_public_key=None,
+        user_sig_suite="ed25519",
+        user_signature="user-self-sig",
+        identity_anchor="anchoruuid",
+    )
+    assert UserIdentityAssertion.from_wire_dict(a.to_wire_dict()) == a
+
+
+def test_user_identity_assertion_wire_roundtrip_legacy_omits_binding():
+    """A legacy / first-revision assertion (no binding fields) round-trips with
+    its defaults intact."""
+    a = UserIdentityAssertion(
+        user_id="u1",
+        instance_id="i1",
+        username="alice",
+        display_name="Alice",
+        issued_at="2026-01-01T00:00:00+00:00",
+        signature="instance-sig",
+    )
+    assert UserIdentityAssertion.from_wire_dict(a.to_wire_dict()) == a

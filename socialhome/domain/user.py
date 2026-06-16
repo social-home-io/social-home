@@ -282,6 +282,55 @@ class UserIdentityAssertion:
     # revision payloads that omit it still parse with byte-identical signatures.
     identity_anchor: str | None = None
 
+    def to_wire_dict(self) -> dict[str, object]:
+        """Serialise to the federation wire shape (plain JSON-able dict).
+
+        Carries the full field set — including the nullable Phase-1 binding
+        fields and the anchor — so a binding-bearing assertion round-trips
+        losslessly. ``None`` values are kept (not pruned) so the receiver's
+        ``from_wire_dict`` reconstructs identical defaults.
+        """
+        return {
+            "user_id": self.user_id,
+            "instance_id": self.instance_id,
+            "username": self.username,
+            "display_name": self.display_name,
+            "issued_at": self.issued_at,
+            "signature": self.signature,
+            "picture_hash": self.picture_hash,
+            "public_key": self.public_key,
+            "public_key_version": self.public_key_version,
+            "user_identity_public_key": self.user_identity_public_key,
+            "user_pq_public_key": self.user_pq_public_key,
+            "user_sig_suite": self.user_sig_suite,
+            "user_signature": self.user_signature,
+            "identity_anchor": self.identity_anchor,
+        }
+
+    @classmethod
+    def from_wire_dict(cls, data: dict[str, object]) -> "UserIdentityAssertion":
+        """Reconstruct from the wire shape produced by :meth:`to_wire_dict`.
+
+        The optional binding/anchor fields default to ``None`` when absent so a
+        legacy / first-revision payload still parses.
+        """
+        return cls(
+            user_id=str(data["user_id"]),
+            instance_id=str(data["instance_id"]),
+            username=str(data["username"]),
+            display_name=str(data["display_name"]),
+            issued_at=str(data["issued_at"]),
+            signature=str(data["signature"]),
+            picture_hash=data.get("picture_hash"),  # type: ignore[arg-type]
+            public_key=data.get("public_key"),  # type: ignore[arg-type]
+            public_key_version=int(data.get("public_key_version") or 0),  # type: ignore[call-overload]
+            user_identity_public_key=data.get("user_identity_public_key"),  # type: ignore[arg-type]
+            user_pq_public_key=data.get("user_pq_public_key"),  # type: ignore[arg-type]
+            user_sig_suite=data.get("user_sig_suite"),  # type: ignore[arg-type]
+            user_signature=data.get("user_signature"),  # type: ignore[arg-type]
+            identity_anchor=data.get("identity_anchor"),  # type: ignore[arg-type]
+        )
+
 
 @dataclass(slots=True, frozen=True)
 class DisplayableUser:

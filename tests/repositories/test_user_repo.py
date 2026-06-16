@@ -592,3 +592,148 @@ async def test_rename_username_leaves_remote_owned_space_untouched(env):
         "SELECT owner_username FROM spaces WHERE id=?", ("space-remote",)
     )
     assert row["owner_username"] == "bob"
+
+
+# ── Move-out redirect (MO-1, migration 0044) ──────────────────────────────
+
+
+async def _seed_remote_instance(env, instance_id: str) -> None:
+    """Seed the ``remote_instances`` parent row a ``remote_users`` FK needs."""
+    await env.db.enqueue(
+        """INSERT INTO remote_instances(
+               id, display_name, remote_identity_pk, key_self_to_remote,
+               key_remote_to_self, remote_inbox_url, local_inbox_id,
+               status, source
+           ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            instance_id,
+            instance_id.title(),
+            "00" * 32,
+            "k1",
+            "k2",
+            f"https://{instance_id}.example/federation/inbox/x",
+            f"local-inbox-{instance_id}",
+            "confirmed",
+            "manual",
+        ),
+    )
+
+
+async def _seed_remote_user(env, *, user_id: str, instance_id: str) -> None:
+    """Seed a ``remote_users`` row (parent instance first) for move tests."""
+    from socialhome.domain.user import RemoteUser
+
+    await _seed_remote_instance(env, instance_id)
+    await env.user_repo.upsert_remote(
+        RemoteUser(
+            user_id=user_id,
+            instance_id=instance_id,
+            remote_username=user_id,
+            display_name=user_id.title(),
+        ),
+    )
+
+
+async def test_record_user_move_sets_redirect_and_resolves(env):
+    """``record_user_move`` writes the forwarding pointer; ``get_move_link``
+    returns the stored JSON and ``resolve_current_identity`` forwards the old
+    id to the new identity."""
+    await _seed_remote_user(env, user_id="old", instance_id="oi")
+    await _seed_remote_user(env, user_id="new", instance_id="ni")
+
+    await env.user_repo.record_user_move(
+        old_user_id="old",
+        new_user_id="new",
+        new_instance_id="ni",
+        issued_at="2026-06-16T12:00:00+00:00",
+        move_link_json='{"to":"new"}',
+    )
+
+    assert await env.user_repo.get_move_link("old") == '{"to":"new"}'
+    assert await env.user_repo.resolve_current_identity("old") == ("new", "ni")
+
+
+async def test_record_user_move_is_monotonic_on_issued_at(env):
+    """A second move with an OLDER ``issued_at`` is rejected (StaleMoveLink);
+    a strictly-NEWER one wins and updates the redirect."""
+    from socialhome.domain.move_errors import StaleMoveLink
+
+    await _seed_remote_user(env, user_id="old", instance_id="oi")
+    await _seed_remote_user(env, user_id="new", instance_id="ni")
+    await _seed_remote_user(env, user_id="newer", instance_id="zi")
+
+    await env.user_repo.record_user_move(
+        old_user_id="old",
+        new_user_id="new",
+        new_instance_id="ni",
+        issued_at="2026-06-16T12:00:00+00:00",
+        move_link_json='{"to":"new"}',
+    )
+
+    # Older issued_at — rejected, redirect unchanged.
+    with pytest.raises(StaleMoveLink):
+        await env.user_repo.record_user_move(
+            old_user_id="old",
+            new_user_id="newer",
+            new_instance_id="zi",
+            issued_at="2026-06-16T11:00:00+00:00",
+            move_link_json='{"to":"newer"}',
+        )
+    assert await env.user_repo.resolve_current_identity("old") == ("new", "ni")
+
+    # Strictly newer issued_at — accepted, redirect updated.
+    await env.user_repo.record_user_move(
+        old_user_id="old",
+        new_user_id="newer",
+        new_instance_id="zi",
+        issued_at="2026-06-16T13:00:00+00:00",
+        move_link_json='{"to":"newer"}',
+    )
+    assert await env.user_repo.resolve_current_identity("old") == ("newer", "zi")
+
+
+async def test_resolve_current_identity_walks_chain(env):
+    """A chain A->B->C resolves the head to the tip identity."""
+    await _seed_remote_user(env, user_id="A", instance_id="ai")
+    await _seed_remote_user(env, user_id="B", instance_id="bi")
+    await _seed_remote_user(env, user_id="C", instance_id="ci")
+
+    await env.user_repo.record_user_move(
+        old_user_id="A",
+        new_user_id="B",
+        new_instance_id="bi",
+        issued_at="2026-06-16T12:00:00+00:00",
+        move_link_json='{"to":"B"}',
+    )
+    await env.user_repo.record_user_move(
+        old_user_id="B",
+        new_user_id="C",
+        new_instance_id="ci",
+        issued_at="2026-06-16T12:30:00+00:00",
+        move_link_json='{"to":"C"}',
+    )
+
+    assert await env.user_repo.resolve_current_identity("A") == ("C", "ci")
+
+
+async def test_resolve_current_identity_unmoved_resolves_to_self(env):
+    """An unmoved seeded user resolves to its own (user_id, instance_id)."""
+    await _seed_remote_user(env, user_id="stay", instance_id="si")
+    assert await env.user_repo.resolve_current_identity("stay") == ("stay", "si")
+
+
+async def test_resolve_current_identity_unknown_returns_none(env):
+    """An unknown user_id resolves to None."""
+    assert await env.user_repo.resolve_current_identity("ghost") is None
+
+
+async def test_get_remote_user_identity_pubkey_round_trips(env):
+    """The stored verified P is returned hex→bytes; None when absent/unknown."""
+    await _seed_remote_user(env, user_id="moverP", instance_id="siP")
+    # No key stored yet → None.
+    assert await env.user_repo.get_remote_user_identity_pubkey("moverP") is None
+    await env.user_repo.set_remote_user_identity_key("moverP", public_key_hex="ab" * 32)
+    got = await env.user_repo.get_remote_user_identity_pubkey("moverP")
+    assert got == bytes.fromhex("ab" * 32)
+    # Unknown user_id → None.
+    assert await env.user_repo.get_remote_user_identity_pubkey("ghost") is None

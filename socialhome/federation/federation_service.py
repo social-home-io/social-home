@@ -689,6 +689,29 @@ class FederationService:
         except ValueError:  # pragma: no cover — pinned key is always valid hex
             return None
 
+    async def is_confirmed_peer(self, instance_id: str) -> bool:
+        """``True`` iff ``instance_id`` is a CONFIRMED peer we've paired with.
+
+        Reads the peer's ``remote_instances.status`` and checks it equals
+        :data:`PairingStatus.CONFIRMED`. An unknown / unpaired / pending /
+        unpairing peer reads as not-confirmed. Used by inbound handlers to
+        refuse to serve sensitive replies to a peer we haven't actually
+        confirmed (the §24.11 pipeline authenticates the *sender*, not that
+        we trust them — a peer mid-pairing or merely known is still gated).
+
+        Fail-soft: an empty id or a repo error yields ``False`` (treat as
+        not-confirmed) so a caller can drop the request rather than crash.
+        """
+        if not instance_id:
+            return False
+        try:
+            peer = await self._federation_repo.get_instance(instance_id)
+        except Exception:  # pragma: no cover — defensive
+            return False
+        if peer is None:
+            return False
+        return peer.status is PairingStatus.CONFIRMED
+
     @property
     def own_identity_seed(self) -> bytes:
         return self._own_identity_seed

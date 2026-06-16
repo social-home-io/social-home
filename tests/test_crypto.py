@@ -8,13 +8,22 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from socialhome.crypto import (
+    MOVE_LINK_SUITE_ED25519,
     REPLAY_CACHE_WINDOW,
+    SUPPORTED_MOVE_LINK_SUITES,
     SUPPORTED_USER_SIG_SUITES,
     USER_SIG_SUITE_ED25519,
+    MoveLinkBindingInvalid,
+    MoveLinkError,
+    MoveLinkReleaseDestinationMismatch,
+    MoveLinkReleaseSigInvalid,
+    MoveLinkUserSigInvalid,
     ReplayCache,
+    UnsupportedMoveLinkSuite,
     UnsupportedUserSigSuite,
     b64url_decode,
     b64url_encode,
+    build_move_link,
     build_user_identity_assertion,
     derive_instance_id,
     derive_user_id,
@@ -25,11 +34,15 @@ from socialhome.crypto import (
     random_token,
     sha256_hex,
     sign_ed25519,
+    move_link_release_signed_bytes,
+    move_link_user_signed_bytes,
     sign_user_assertion,
     sign_user_self,
     user_identity_signed_bytes,
+    validate_move_link_suite,
     validate_user_sig_suite,
     verify_ed25519,
+    verify_move_link,
     verify_user_identity_assertion,
     verify_user_self,
     x25519_exchange,
@@ -728,3 +741,319 @@ def test_anchored_binding_roundtrip():
     )
     with pytest.raises(ValueError, match="self-signature"):
         verify_user_identity_assertion(user_tampered, instance_kp.public_key)
+
+
+# ─── Move-out link suite tag + signed bytes (move-out link, Task 1) ────────
+
+
+def test_move_link_suite_contract():
+    """MOVE_LINK_SUITE tag contract: ed25519 only, reject unknown suites and
+    non-strings (no TypeError leak)."""
+    assert MOVE_LINK_SUITE_ED25519 == "ed25519"
+    assert MOVE_LINK_SUITE_ED25519 in SUPPORTED_MOVE_LINK_SUITES
+    assert "ed25519+mldsa65" not in SUPPORTED_MOVE_LINK_SUITES
+    assert issubclass(UnsupportedMoveLinkSuite, ValueError)
+    assert validate_move_link_suite(MOVE_LINK_SUITE_ED25519) is None
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        validate_move_link_suite("rot13")
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        validate_move_link_suite(object())  # type: ignore[arg-type]
+
+
+def _move_link_byte_args():
+    kp = generate_identity_keypair()
+    new_kp = generate_identity_keypair()
+    return dict(
+        old_user_id="old_uid",
+        new_user_id="new_uid",
+        user_public_key=kp.public_key,
+        new_instance_public_key=new_kp.public_key,
+        issued_at="2026-06-16T00:00:00+00:00",
+        suite=MOVE_LINK_SUITE_ED25519,
+    )
+
+
+def test_move_link_release_bytes_commit_to_destination_user_id():
+    """The release signature is a destination-pin — changing only the
+    destination user_id changes the signed bytes."""
+    args = _move_link_byte_args()
+    a = move_link_release_signed_bytes(**args)
+    b = move_link_release_signed_bytes(**{**args, "new_user_id": "other_uid"})
+    assert a != b
+
+
+def test_move_link_user_and_release_bytes_differ_for_identical_params():
+    """The user and release legs use distinct domain tags so the two signatures
+    can never be cross-replayed, even over identical params."""
+    args = _move_link_byte_args()
+    assert move_link_user_signed_bytes(**args) != move_link_release_signed_bytes(**args)
+
+
+# ─── Move-out link build + verify (move-out link, Task 2) ──────────────────
+
+
+def _build_move_scenario(*, username: str = "pascal", display_name: str = "Pascal"):
+    """Mint a realistic move-out scenario and return everything a test needs.
+
+    A single portable per-user keypair ``P`` and a shared ``identity_anchor``
+    span both homes (a move is NOT a re-keying). ``old_id``/``new_id`` derive
+    from each home's instance pubkey + the anchor. The new home's P-binding
+    rides in a real ``UserIdentityAssertion`` signed by the new home.
+
+    Returns a dict of the pieces (keypairs, ids, the assembled MoveLink, the
+    verify-time inputs).
+    """
+    user_kp = generate_identity_keypair()  # portable P
+    old_home_kp = generate_identity_keypair()
+    new_home_kp = generate_identity_keypair()
+
+    anchor = "deadbeefcafef00d" * 2  # opaque uuid-like, spans both homes
+    old_instance_id = derive_instance_id(old_home_kp.public_key)
+    new_instance_id = derive_instance_id(new_home_kp.public_key)
+    old_user_id = derive_user_id(old_home_kp.public_key, anchor)
+    new_user_id = derive_user_id(new_home_kp.public_key, anchor)
+    issued = datetime.now(timezone.utc).isoformat()
+
+    new_home_assertion = build_user_identity_assertion(
+        instance_seed=new_home_kp.private_key,
+        user_id=new_user_id,
+        instance_id=new_instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+
+    link = build_move_link(
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        old_home_instance_seed=old_home_kp.private_key,
+        old_user_id=old_user_id,
+        old_instance_id=old_instance_id,
+        new_instance_public_key=new_home_kp.public_key,
+        new_home_assertion=new_home_assertion,
+        issued_at=issued,
+    )
+    return {
+        "user_kp": user_kp,
+        "old_home_kp": old_home_kp,
+        "new_home_kp": new_home_kp,
+        "anchor": anchor,
+        "old_user_id": old_user_id,
+        "new_user_id": new_user_id,
+        "link": link,
+    }
+
+
+def test_verify_move_link_accepts_well_formed_link():
+    """A link built by build_move_link verifies under dual consent + bindings."""
+    s = _build_move_scenario()
+    # Does not raise -> user sig, release sig, and both bindings verify.
+    verify_move_link(
+        s["link"],
+        old_home_pinned_pk=s["old_home_kp"].public_key,
+        stored_old_user_pubkey=s["user_kp"].public_key,
+    )
+
+
+def test_verify_move_link_wrong_length_new_instance_key_typed_error():
+    """A valid-hex but wrong-length new_instance_public_key is rejected as a
+    typed MoveLinkBindingInvalid (not a bare ValueError from derive_instance_id)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], new_instance_public_key="aa")
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_malformed_user_signature_encoding_typed_error():
+    """A malformed-base64 user_signature is rejected as a typed
+    MoveLinkUserSigInvalid (not a bare binascii.Error)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], user_signature="a")
+    with pytest.raises(MoveLinkUserSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_malformed_release_signature_encoding_typed_error():
+    """A malformed-base64 release_signature is rejected as a typed
+    MoveLinkReleaseSigInvalid (not a bare binascii.Error)."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], release_signature="a")
+    with pytest.raises(MoveLinkReleaseSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_forged_user_signature_rejected():
+    """A tampered user_signature fails the USER-consent leg."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], user_signature=b64url_encode(b"\x00" * 64))
+    with pytest.raises(MoveLinkUserSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_forged_release_signature_rejected():
+    """A tampered release_signature fails the old-home RELEASE-consent leg."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], release_signature=b64url_encode(b"\x00" * 64))
+    with pytest.raises(MoveLinkReleaseSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_release_resigned_for_other_destination_rejected():
+    """A release signed over a DIFFERENT destination, spliced onto the original
+    link, fails: the recomputed release bytes commit to this link's destination
+    so the foreign release doesn't verify (destination-pin)."""
+    s = _build_move_scenario()
+    other = _build_move_scenario()  # a different new home + new_user_id
+    # Splice the foreign release sig onto the original link (everything else,
+    # including the original destination, stays).
+    spliced = dataclasses.replace(
+        s["link"], release_signature=other["link"].release_signature
+    )
+    with pytest.raises((MoveLinkReleaseSigInvalid, MoveLinkReleaseDestinationMismatch)):
+        verify_move_link(
+            spliced,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_stored_old_user_pubkey_mismatch_rejected():
+    """If the receiver's stored P for old_user_id != the link's P, reject:
+    binding #3 (P↔old_id) fails."""
+    s = _build_move_scenario()
+    wrong = generate_identity_keypair()
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            s["link"],
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=wrong.public_key,
+        )
+
+
+def test_verify_move_link_tampered_new_home_assertion_rejected():
+    """A corrupted embedded new_home_assertion (instance signature broken)
+    fails binding #4."""
+    s = _build_move_scenario()
+    tampered_assertion = dataclasses.replace(
+        s["link"].new_home_assertion,
+        signature=b64url_encode(b"\x00" * 64),
+    )
+    bad = dataclasses.replace(s["link"], new_home_assertion=tampered_assertion)
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_new_home_assertion_binds_different_p_rejected():
+    """If the embedded assertion binds a P different from the link's P, reject:
+    the P↔new_id binding is inconsistent with the link's portable key."""
+    s = _build_move_scenario()
+    other_p = generate_identity_keypair()
+    tampered_assertion = dataclasses.replace(
+        s["link"].new_home_assertion,
+        user_identity_public_key=other_p.public_key.hex(),
+    )
+    bad = dataclasses.replace(s["link"], new_home_assertion=tampered_assertion)
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_unknown_suite_rejected():
+    """An unknown move-link suite is rejected with no default fallback."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], suite="ed25519+mldsa65")
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_freshness_is_caller_controlled():
+    """A move-link is a DURABLE record: an ~800-day-old but otherwise valid link
+    verifies SUCCESSFULLY under the default ``max_age=None`` (the resolve-backstop
+    case), and the SAME link is REJECTED when the caller passes a tight
+    ``max_age`` — proving the bound now reaches both the link's own freshness
+    gate AND the embedded new-home assertion check."""
+    s = _build_move_scenario()
+    way_back = (datetime.now(timezone.utc) - timedelta(days=800)).isoformat()
+    # Build a fully-consistent but OLD link (assertion + link share the old date)
+    # so it fails ONLY on freshness when freshness is actually enforced.
+    user_kp = s["user_kp"]
+    old_home_kp = s["old_home_kp"]
+    new_home_kp = s["new_home_kp"]
+    anchor = s["anchor"]
+    new_instance_id = derive_instance_id(new_home_kp.public_key)
+    new_user_id = derive_user_id(new_home_kp.public_key, anchor)
+    old_instance_id = derive_instance_id(old_home_kp.public_key)
+    old_user_id = derive_user_id(old_home_kp.public_key, anchor)
+    old_assertion = build_user_identity_assertion(
+        instance_seed=new_home_kp.private_key,
+        user_id=new_user_id,
+        instance_id=new_instance_id,
+        username="pascal",
+        display_name="Pascal",
+        issued_at=way_back,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+    old_link = build_move_link(
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        old_home_instance_seed=old_home_kp.private_key,
+        old_user_id=old_user_id,
+        old_instance_id=old_instance_id,
+        new_instance_public_key=new_home_kp.public_key,
+        new_home_assertion=old_assertion,
+        issued_at=way_back,
+    )
+
+    # (a) Durable record: default max_age=None does NOT age-check anywhere — the
+    #     signatures + bindings still verify, only the age gates are skipped.
+    verify_move_link(
+        old_link,
+        old_home_pinned_pk=old_home_kp.public_key,
+        stored_old_user_pubkey=user_kp.public_key,
+    )
+
+    # (b) Caller can still bound freshness: a tight max_age rejects the SAME link,
+    #     proving the bound reaches the embedded assertion check too.
+    with pytest.raises(MoveLinkError):
+        verify_move_link(
+            old_link,
+            old_home_pinned_pk=old_home_kp.public_key,
+            stored_old_user_pubkey=user_kp.public_key,
+            max_age=timedelta(days=30),
+        )

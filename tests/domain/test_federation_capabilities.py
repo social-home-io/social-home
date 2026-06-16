@@ -6,14 +6,19 @@ from socialhome.domain import federation_capabilities as fc
 
 
 def test_ours_is_current_version():
-    assert fc.OURS == 26
+    assert fc.OURS == 27
 
 
-def test_ours_is_26_and_identity_anchor_capability():
+def test_ours_is_27_and_identity_anchor_capability():
     from socialhome.domain import federation_capabilities as fc
 
-    assert fc.OURS == 26
+    assert fc.OURS == 27
     assert fc.FederationCapability.MIN_FOR_IDENTITY_ANCHOR == 26
+
+
+def test_user_move_capability_threshold():
+    assert fc.FederationCapability.MIN_FOR_USER_MOVE == 27
+    assert fc.FederationCapability.MIN_FOR_USER_MOVE <= fc.OURS
 
 
 def test_user_identity_key_capability_threshold():
