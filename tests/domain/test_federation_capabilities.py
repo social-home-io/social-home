@@ -9,7 +9,7 @@ def test_ours_is_current_version():
     assert fc.OURS == 27
 
 
-def test_ours_is_26_and_identity_anchor_capability():
+def test_ours_is_27_and_identity_anchor_capability():
     from socialhome.domain import federation_capabilities as fc
 
     assert fc.OURS == 27

@@ -12,7 +12,7 @@ from socialhome.domain.federation_capabilities import (
 )
 
 
-def test_ours_is_v26_with_identity_anchor_capability():
+def test_ours_is_v27_with_identity_anchor_capability():
     """v_26 introduces the identity_anchor field anchoring user_id derivation
     (v_25 added per-user identity binding, v_24 added admin-authoritative offline
     config edits, v_23 peer-replicated space roster gossip, v_22 the delegated-admin
