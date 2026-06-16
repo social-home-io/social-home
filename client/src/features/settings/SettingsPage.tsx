@@ -29,6 +29,7 @@ import { relativeDocsTime } from '@/utils/relativeTime'
 import { userPreferences } from '@/store/userPreferences'
 import { isHomeAssistant } from '@/platform'
 import { UsernameEditor } from './UsernameEditor'
+import { HandleEditor } from './HandleEditor'
 
 interface SpaceLocationRow {
   space_id: string
@@ -252,7 +253,9 @@ function ProfileTab() {
             <strong class="sh-profile-name">
               {displayName.value || '—'}
             </strong>
-            <span class="sh-muted">@{currentUser.value?.username}</span>
+            <span class="sh-muted">
+              @{currentUser.value?.handle ?? currentUser.value?.username}
+            </span>
           </div>
           {/* Source badge — informational only ("where this profile is
            *  edited from"), not a button. The previous copy "✏️ Set
@@ -293,6 +296,8 @@ function ProfileTab() {
           <Button type="submit">Save profile</Button>
         </div>
       </form>
+
+      <HandleEditor />
 
       <UsernameEditor />
 

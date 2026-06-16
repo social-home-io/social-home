@@ -1,6 +1,10 @@
 export interface User {
   user_id: string
   username: string
+  /** Public ``@``-name — how others find this user. Editable by all users
+   *  via ``POST /api/me/handle``; may be null before one is set, in which
+   *  case display surfaces fall back to ``username``. */
+  handle?: string | null
   display_name: string
   is_admin: boolean
   /** Server-built URL like ``/api/users/{id}/picture?v=<hash>`` or null. */

@@ -21,6 +21,8 @@ import { requiresHaUserPassword } from '@/platform'
 
 interface HaUser {
   username:     string
+  /** Public ``@``-handle; falls back to ``username`` when unset. */
+  handle?:      string | null
   display_name: string
   picture_url:  string | null
   is_admin:     boolean
@@ -154,7 +156,7 @@ export function HaUsersPanel() {
             <Avatar name={u.display_name} src={u.picture_url} size={36} />
             <div class="sh-ha-user-info">
               <span class="sh-ha-user-name">{u.display_name}</span>
-              <span class="sh-muted">@{u.username}</span>
+              <span class="sh-muted">@{u.handle ?? u.username}</span>
               {u.is_admin && (
                 <span class="sh-badge sh-badge--admin">Admin</span>
               )}

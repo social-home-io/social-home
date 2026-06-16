@@ -46,10 +46,10 @@ export function UsernameEditor() {
   if (isHaUser) {
     return (
       <div class="sh-username-editor">
-        <h3>Username</h3>
+        <h3>Login identifier</h3>
         <p class="sh-profile-name" style={{ margin: 0 }}>{currentUsername}</p>
         <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)', margin: 0 }}>
-          Your username is managed by Home Assistant.
+          The username you sign in with — managed by Home Assistant.
         </p>
       </div>
     )
@@ -93,7 +93,7 @@ export function UsernameEditor() {
 
   return (
     <form class="sh-username-editor sh-form" onSubmit={handleSave}>
-      <h3>Username</h3>
+      <h3>Login identifier</h3>
       <label>
         Username
         <input
@@ -110,7 +110,7 @@ export function UsernameEditor() {
         />
       </label>
       <p class="sh-muted" style={{ fontSize: 'var(--sh-font-size-sm)', margin: 0 }}>
-        Letters, numbers, and underscores. This is how others find you.
+        The username you sign in with. Letters, numbers, and underscores.
       </p>
       <FormError id={ERROR_ID} message={error.value} />
       <div class="sh-form-actions">
