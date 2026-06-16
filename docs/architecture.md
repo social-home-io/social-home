@@ -125,6 +125,15 @@ central registry is involved.
   federate via `USER_UPDATED` events so peers keep their
   `remote_users.username` in sync. The cryptographic identity
   (`user_id` / `identity_anchor`) is unaffected by a rename.
+- **`handle`** — a **public `@handle`** (distinct from both the
+  cryptographic `user_id` and the login `username`). A mutable,
+  per-household-unique, case-insensitive display name set via
+  `POST /api/me/handle` by any local user (including HA-managed).
+  Unsigned public display metadata (federated on `USER_UPDATED` /
+  `USERS_SYNC` alongside `display_name` and `picture`, never part of
+  the signed identity binding). On remote instances cached in
+  `remote_users.handle` (per-peer COALESCE-sticky so older peers or
+  non-handle edits never null the cached value).
 
 #### Instance identity vs. per-user identity
 

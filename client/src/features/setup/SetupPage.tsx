@@ -13,6 +13,8 @@ import { t } from '@/i18n/i18n'
 
 interface HaPerson {
   username: string
+  /** Public ``@``-handle; falls back to ``username`` when unset. */
+  handle?: string | null
   display_name: string
   picture_url: string | null
 }
@@ -652,7 +654,7 @@ function HaOwnerForm() {
                     : <span aria-hidden="true">{initials(p.display_name)}</span>}
                 </span>
                 <span class="sh-setup-person-name">{p.display_name}</span>
-                <span class="sh-setup-person-username">@{p.username}</span>
+                <span class="sh-setup-person-username">@{p.handle ?? p.username}</span>
               </label>
             ))}
           </div>

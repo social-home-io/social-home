@@ -149,6 +149,14 @@ class User:
     # set it (reads from older code paths, test fixtures) still construct.
     identity_anchor: str | None = None
 
+    # Public, mutable, per-household-unique @handle — the public-facing name
+    # (distinct from the login ``username``, which under ``source='ha'`` is
+    # HA-controlled). Backfilled = username for existing rows (migration 0043);
+    # new users get ``handle = username`` at provision. Unsigned display
+    # metadata (federated via USER_UPDATED), never an identity input. Defaulted
+    # ``None`` so older call sites / fixtures still construct.
+    handle: str | None = None
+
     def is_active(self) -> bool:
         return self.state == "active" and self.deleted_at is None
 
@@ -176,6 +184,11 @@ class RemoteUser:
     public_key: str | None = None
     public_key_version: int = 0
     synced_at: str | None = None
+    #: Public, per-household-unique @handle mirrored from the peer's
+    #: ``USER_UPDATED`` payload — unsigned display metadata, the remote-side
+    #: cache of :attr:`User.handle`. ``None`` for a peer at an older proto
+    #: version that doesn't ship the field yet.
+    handle: str | None = None
     #: ISO-8601 UTC timestamp marking the user as locally deprovisioned —
     #: set by the inbound ``USER_REMOVED`` handler. Filters the user out of
     #: member lists / autocomplete via ``list_remote_for_instance`` and

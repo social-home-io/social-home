@@ -23,7 +23,7 @@ export function ProfileCard({ user, onDm, onClose }: ProfileCardProps) {
       <div class="sh-profile-header">
         <Avatar name={user.display_name} src={user.picture_url} size={64} />
         <h3>{user.display_name}</h3>
-        <span class="sh-muted">@{user.username}</span>
+        <span class="sh-muted">@{user.handle ?? user.username}</span>
         {user.is_admin && <span class="sh-badge sh-badge--admin">Admin</span>}
       </div>
       {user.bio && <p class="sh-profile-bio">{user.bio}</p>}

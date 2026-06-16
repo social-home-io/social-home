@@ -67,14 +67,34 @@ class _FakeFederationService:
 
 
 class _FakeUserRepo:
-    def __init__(self, keypairs: dict[str, tuple[bytes, bytes]]) -> None:
+    def __init__(
+        self,
+        keypairs: dict[str, tuple[bytes, bytes]],
+        *,
+        handles: dict[str, str | None] | None = None,
+    ) -> None:
         self._keypairs = keypairs
+        self._handles = handles or {}
 
     async def get_user_identity_keypair(self, username: str):
         return self._keypairs.get(username)
 
     async def get_user_identity_anchor(self, username: str):
         return None
+
+    async def get_by_user_id(self, user_id: str):
+        # Minimal stand-in: the outbound only reads ``.handle`` to fill
+        # the USER_UPDATED payload when the event itself omitted it.
+        handle = self._handles.get(user_id)
+        if handle is None:
+            return None
+
+        class _U:
+            pass
+
+        u = _U()
+        u.handle = handle
+        return u
 
 
 class _Peer:
@@ -113,6 +133,7 @@ def _event(**over) -> UserProfileUpdated:
         bio="hello",
         picture_hash="h1",
         picture_webp=None,
+        handle=None,
     )
     base.update(over)
     return UserProfileUpdated(**base)
@@ -146,7 +167,40 @@ async def test_fanouts_to_every_paired_peer_excluding_self(env):
             "display_name": "Alice",
             "bio": "hello",
             "picture_hash": "h1",
+            "handle": None,
         }
+
+
+async def test_handle_from_event_rides_user_updated_payload(env):
+    """A ``UserProfileUpdated`` carrying ``handle='bobby'`` puts that handle on
+    every emitted ``USER_UPDATED`` payload, alongside ``display_name``."""
+    bus, fed = env
+    await bus.publish(_event(handle="bobby"))
+    assert fed.sent  # fan-out happened
+    for _to, _ev, payload in fed.sent:
+        assert payload["handle"] == "bobby"
+        assert payload["display_name"] == "Alice"
+
+
+async def test_handle_falls_back_to_user_row_when_event_omits_it():
+    """A profile edit (display_name/bio/picture) publishes
+    ``UserProfileUpdated`` with ``handle=None``; the outbound back-fills the
+    handle from the user row so a non-handle edit never wipes the peer's cached
+    handle to NULL."""
+    bus = EventBus()
+    fed = _FakeFederationService()
+    repo = _FakeFedRepo(["peer-1"])
+    user_repo = _FakeUserRepo({}, handles={"u1": "bobby"})
+    out = ProfileFederationOutbound(
+        bus=bus,
+        federation_service=fed,
+        federation_repo=repo,
+        user_repo=user_repo,
+    )
+    out.wire()
+    await bus.publish(_event(handle=None))
+    payload = fed.sent[0][2]
+    assert payload["handle"] == "bobby"
 
 
 async def test_picture_bytes_base64d_when_present(env):
@@ -301,6 +355,7 @@ async def test_v24_peer_gets_legacy_shape_without_binding():
         "display_name": "Alice",
         "bio": "hello",
         "picture_hash": "h1",
+        "handle": None,
     }
 
 

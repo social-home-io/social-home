@@ -6,6 +6,8 @@ GET  /api/users               — list all active users (admin view)
 POST /api/me/picture          — upload a new profile picture (multipart)
 DELETE /api/me/picture        — clear the picture (revert to initials)
 GET  /api/users/{user_id}/picture — stream the cached WebP bytes
+POST /api/me/username         — rename the authenticated user's login username
+POST /api/me/handle           — set the authenticated user's public @handle
 POST /api/me/tokens           — create an API token
 DELETE /api/me/tokens/{id}    — revoke a token
 GET  /api/me/export           — GDPR-style data export
@@ -194,6 +196,27 @@ class MeUsernameView(BaseView):
         except ValueError as exc:
             return error_response(422, "INVALID_USERNAME", str(exc))
         return web.json_response({"username": new.strip()})
+
+
+class MeHandleView(BaseView):
+    """POST /api/me/handle — set the authenticated user's public @handle.
+
+    Unlike username rename, handle is editable by ALL users, including
+    ``ha``-source rows. Format / reserved / taken failures map to 422.
+    """
+
+    async def post(self) -> web.Response:
+        ctx = self.user
+        body = await self.body()
+        new = body.get("handle")
+        if not isinstance(new, str) or not new.strip():
+            return error_response(422, "UNPROCESSABLE", "handle is required.")
+        svc = self.svc(user_service_key)
+        try:
+            await svc.set_handle(ctx.username, new)
+        except ValueError as exc:
+            return error_response(422, "INVALID_HANDLE", str(exc))
+        return web.json_response({"handle": new.strip()})
 
 
 class MePictureView(BaseView):

@@ -539,6 +539,168 @@ def test_0042_rebuild_preserves_calendar_with_existing_event(tmp_path):
         conn.close()
 
 
+@pytest.mark.asyncio
+async def test_0043_handle_columns_and_backfill(tmp_path):
+    """Migration 0043 adds public handle columns to users and remote_users.
+    The handle column is backfilled with username for existing users, and
+    a per-household, case-insensitive UNIQUE NOCASE index is created."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+
+    # Check users table has handle column
+    users_cols = {r["name"] for r in await db.fetchall("PRAGMA table_info(users)")}
+    assert "handle" in users_cols, "handle missing from users table"
+
+    # Check remote_users table has handle column
+    remote_users_cols = {
+        r["name"] for r in await db.fetchall("PRAGMA table_info(remote_users)")
+    }
+    assert "handle" in remote_users_cols, "handle missing from remote_users table"
+
+    # Check that UNIQUE NOCASE index exists for users.handle
+    indices = await db.fetchall(
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='users'"
+    )
+    index_names = {r["name"] for r in indices}
+    assert any("handle" in name for name in index_names), (
+        f"No handle index found in users; indices: {index_names}"
+    )
+
+    await db.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_0043_handle_case_insensitive_uniqueness(tmp_path):
+    """Migration 0043's UNIQUE NOCASE index enforces case-insensitive
+    uniqueness on users.handle. Inserting a user with handle='alice',
+    then attempting handle='ALICE' must fail."""
+    db = AsyncDatabase(tmp_path / "test.db", batch_timeout_ms=10)
+    await db.startup()
+    conn = db._conn
+
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+    # Insert first user with lowercase handle
+    conn.execute(
+        "INSERT INTO users (username, user_id, display_name, identity_anchor, handle) "
+        "VALUES (?,?,?,?,?)",
+        ("alice", "uid-alice", "Alice", "alice", "alice"),
+    )
+    conn.commit()
+
+    # Attempt to insert with uppercase variant - should fail
+    try:
+        conn.execute(
+            "INSERT INTO users (username, user_id, display_name, identity_anchor, handle) "
+            "VALUES (?,?,?,?,?)",
+            ("ALICE", "uid-alice2", "ALICE", "ALICE", "ALICE"),
+        )
+        conn.commit()
+        # If we reach here, the constraint didn't work
+        assert False, (
+            "UNIQUE NOCASE constraint on handle did not prevent case-variant insert"
+        )
+    except sqlite3.IntegrityError:
+        # Expected: constraint violation
+        pass
+
+    # Verify only one user exists
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 1, "Expected 1 user after failed duplicate handle insert"
+
+    await db.shutdown()
+
+
+def test_0043_case_colliding_usernames_do_not_abort(tmp_path):
+    """Migration 0043 must handle case-colliding usernames (e.g. 'Bob' and 'bob')
+    that can coexist in the case-SENSITIVE PRIMARY KEY users.username.
+
+    The backfill handle=username then tries to CREATE UNIQUE INDEX ... COLLATE NOCASE,
+    which would abort the migration if two rows have handles differing only in case.
+
+    The fix: after backfill, UPDATE any handle row that is NOT the lowest-rowid
+    member of its case-insensitive group, suffixing it with '_' + rowid to
+    de-collide before creating the index. The lowest-rowid member keeps its bare
+    handle; the others are suffixed and can pick new handles in Settings later.
+    """
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        all_migrations = discover_migrations(MIGRATIONS_DIR)
+        pre = [m for m in all_migrations if m.version < 43]
+        the_0043 = [m for m in all_migrations if m.version == 43]
+        assert the_0043, "migration 0043 not found"
+
+        # Apply everything up to (but not including) 0043.
+        _ensure_schema_version_for_test(conn)
+        for migration in pre:
+            with conn:
+                migration.apply(conn)
+
+        # Verify the handle column doesn't exist yet.
+        users_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        assert "handle" not in users_cols, "handle must not exist before 0043"
+
+        # Seed two users with usernames differing only in case (case-SENSITIVE, so both
+        # are valid PRIMARY KEY values). This is the edge case 0043 must survive.
+        conn.execute(
+            "INSERT INTO users (username, user_id, display_name, identity_anchor) "
+            "VALUES (?,?,?,?)",
+            ("Bob", "uid-bob", "Bob", "Bob"),
+        )
+        conn.execute(
+            "INSERT INTO users (username, user_id, display_name, identity_anchor) "
+            "VALUES (?,?,?,?)",
+            ("bob", "uid-bob-lower", "bob", "bob"),
+        )
+        conn.commit()
+
+        # Apply 0043.
+        with conn:
+            the_0043[0].apply(conn)
+
+        # The migration must succeed (no exception above).
+
+        # Both rows now have non-NULL handles.
+        row1 = conn.execute(
+            "SELECT rowid, username, handle FROM users WHERE username='Bob'"
+        ).fetchone()
+        row2 = conn.execute(
+            "SELECT rowid, username, handle FROM users WHERE username='bob'"
+        ).fetchone()
+        assert row1["handle"] is not None, "Bob's handle must be non-NULL after 0043"
+        assert row2["handle"] is not None, "bob's handle must be non-NULL after 0043"
+
+        # The two handles must be DISTINCT case-insensitively (no collisions).
+        assert row1["handle"].lower() != row2["handle"].lower(), (
+            f"Handles must differ case-insensitively, got {row1['handle']!r} and {row2['handle']!r}"
+        )
+
+        # The lowest-rowid row kept its bare handle (username as-is).
+        min_rowid = min(row1["rowid"], row2["rowid"])
+        if row1["rowid"] == min_rowid:
+            assert row1["handle"] == "Bob", (
+                f"Lowest-rowid row (Bob, rowid {min_rowid}) should keep bare handle, got {row1['handle']!r}"
+            )
+            assert row2["handle"].startswith("bob_") and row2["handle"].endswith(
+                str(row2["rowid"])
+            ), (
+                f"Higher-rowid row (bob, rowid {row2['rowid']}) should have suffixed handle, got {row2['handle']!r}"
+            )
+        else:
+            assert row2["handle"] == "bob", (
+                f"Lowest-rowid row (bob, rowid {min_rowid}) should keep bare handle, got {row2['handle']!r}"
+            )
+            assert row1["handle"].startswith("Bob_") and row1["handle"].endswith(
+                str(row1["rowid"])
+            ), (
+                f"Higher-rowid row (Bob, rowid {row1['rowid']}) should have suffixed handle, got {row1['handle']!r}"
+            )
+
+    finally:
+        conn.close()
+
+
 def _ensure_schema_version_for_test(conn: sqlite3.Connection) -> None:
     """Create the schema_version stamp table the runner relies on (the
     incremental backfill test applies migrations without run_migrations)."""

@@ -54,6 +54,7 @@ log aggregation.** Code must never log the full query string of
 | GET | `/api/me` | Current user profile. |
 | PATCH | `/api/me` | Update profile fields. Body: any of `{"display_name", "bio", "preferences", "tz"}`. `tz` is validated against the IANA database (unknown name → 422); the SPA's cold-start probe sends it once on first login so personal calendar events default to the user's local wall clock. |
 | POST | `/api/me/username` | Rename the caller's login username. Body: `{"username"}`. The cryptographic `user_id` is unaffected. Invalid / reserved / taken → 422; HA-managed (HA-source) accounts → 403. |
+| POST | `/api/me/handle` | Set the caller's public `@handle`. Body: `{"handle"}`. Returns `{handle}` on success. Per-household case-insensitive uniqueness enforced. Invalid / reserved / taken → 422. Unlike `/api/me/username`, **all** users (including HA-managed) may set their own handle. |
 | GET | `/api/me/picture` | Download current user's avatar. |
 | POST | `/api/me/picture` | Upload avatar (multipart). |
 | DELETE | `/api/me/picture` | Remove avatar. |

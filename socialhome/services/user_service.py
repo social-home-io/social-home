@@ -178,6 +178,7 @@ class UserService:
             created_at=datetime.now(timezone.utc).isoformat(),
             source=source,
             identity_anchor=identity_anchor,
+            handle=username,
         )
         await self._repo.save(user)
         # Mint a KEK-wrapped Ed25519 identity key for the new user so they
@@ -338,6 +339,45 @@ class UserService:
                 bio=user.bio,
                 picture_hash=user.picture_hash,
                 picture_webp=None,
+            ),
+        )
+
+    async def set_handle(self, username: str, new_handle: str) -> None:
+        """Change a local user's public ``handle`` (§public-handle).
+
+        The handle is an SH-local *public* name, distinct from the login
+        ``username``. Unlike :meth:`rename_username` there is **no** ``source``
+        guard — every local user, including ``source='ha'`` rows (whose login
+        username is HA-controlled), may set their own public handle. Uniqueness
+        is per-household and case-insensitive (``idx_users_handle_nocase``).
+
+        A no-op (no event) when the handle is unchanged. Raises
+        :class:`KeyError` if the user is unknown and :class:`ValueError` if the
+        new handle is invalid, reserved, or already taken by another user. On
+        success a :class:`UserProfileUpdated` carrying the new handle is
+        published so the change federates via USER_UPDATED like any other
+        profile edit.
+        """
+        user = await self._repo.get(username)
+        if user is None:
+            raise KeyError(f"user {username!r} not found")
+        new_handle = new_handle.strip()
+        if new_handle == user.handle:
+            return
+        _validate_username(new_handle)
+        existing = await self._repo.get_by_handle(new_handle)
+        if existing is not None and existing.username != username:
+            raise ValueError(f"handle {new_handle!r} is already taken")
+        await self._repo.set_handle(username, new_handle)
+        await self._bus.publish(
+            UserProfileUpdated(
+                user_id=user.user_id,
+                username=user.username,
+                display_name=user.display_name,
+                bio=user.bio,
+                picture_hash=user.picture_hash,
+                picture_webp=None,
+                handle=new_handle,
             ),
         )
 

@@ -296,8 +296,13 @@ async def test_ha_owner_setup_happy_path(aiohttp_client, tmp_dir):
     assert await tc._app[setup_service_key].is_required() is False
     # Mirror row in users table is admin.
     db = tc._app[_db_key]
-    user = await db.fetchone("SELECT is_admin FROM users WHERE username='alice'")
+    user = await db.fetchone(
+        "SELECT is_admin, handle FROM users WHERE username='alice'"
+    )
     assert user is not None and user["is_admin"] == 1
+    # The public ``@handle`` seeds from the username so the row is never
+    # NULL-handle (the §public-handle editor pre-fills + lets the user save).
+    assert user["handle"] == "alice"
 
 
 async def test_ha_owner_setup_requires_password(aiohttp_client, tmp_dir):
@@ -407,12 +412,15 @@ async def test_haos_complete_persists_display_name(aiohttp_client, tmp_dir):
     assert r.status == 200, await r.text()
     db = tc._app[_db_key]
     row = await db.fetchone(
-        "SELECT username, display_name FROM users WHERE username=?",
+        "SELECT username, display_name, handle FROM users WHERE username=?",
         ("socialhome",),
     )
     assert row is not None
     assert row["username"] == "socialhome"
     assert row["display_name"] == "Social Home Test"
+    # The public ``@handle`` seeds from the username so the row is never
+    # NULL-handle (the §public-handle editor pre-fills + lets the user save).
+    assert row["handle"] == "socialhome"
 
 
 async def test_haos_complete_stamps_source_ha_and_external_id(

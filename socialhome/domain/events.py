@@ -636,6 +636,11 @@ class UserProfileUpdated(DomainEvent):
     picture was cleared). ``picture_webp`` carries the bytes so the
     federation-outbound layer can fan them to paired peers; WS
     broadcasts drop it and send only the hash so the frame stays small.
+
+    ``handle`` carries the public @handle so a ``set_handle`` edit can
+    federate via USER_UPDATED like any other profile change. Defaulted
+    ``None`` so the other publishers (display_name/bio/picture edits,
+    renames) that don't touch the handle still construct unchanged.
     """
 
     user_id: str
@@ -644,6 +649,7 @@ class UserProfileUpdated(DomainEvent):
     bio: str | None
     picture_hash: str | None
     picture_webp: bytes | None = None
+    handle: str | None = None
     occurred_at: datetime = field(default_factory=_now)
 
 

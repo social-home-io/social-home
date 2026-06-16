@@ -72,12 +72,14 @@ class _FakeUser:
         display_name: str,
         bio: str | None = None,
         picture_hash: str | None = None,
+        handle: str | None = None,
     ) -> None:
         self.user_id = user_id
         self.username = username
         self.display_name = display_name
         self.bio = bio
         self.picture_hash = picture_hash
+        self.handle = handle
 
 
 class _FakeUserRepo:
@@ -161,6 +163,7 @@ async def test_fanout_on_pair_confirmed_sends_one_envelope(env):
         "display_name": "Alice",
         "bio": "hi",
         "picture_hash": None,
+        "handle": None,
     }
 
 
@@ -379,6 +382,7 @@ async def test_v24_peer_gets_legacy_shape_without_binding():
         "display_name": "Alice",
         "bio": "hi",
         "picture_hash": None,
+        "handle": None,
     }
     assert "user_identity_public_key" not in entry
     assert "user_sig_suite" not in entry

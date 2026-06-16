@@ -378,8 +378,8 @@ async def _mirror_admin_user(db, external: ExternalUser) -> None:
     await db.enqueue(
         """
         INSERT INTO users(username, user_id, display_name, is_admin,
-                          source, external_id)
-        VALUES(?, ?, ?, 1, ?, ?)
+                          source, external_id, handle)
+        VALUES(?, ?, ?, 1, ?, ?, ?)
         ON CONFLICT(username) DO UPDATE SET
             is_admin=1,
             source=excluded.source,
@@ -391,5 +391,10 @@ async def _mirror_admin_user(db, external: ExternalUser) -> None:
             external.display_name or external.username,
             source,
             external.external_id,
+            # Seed the public ``@handle`` from the username on first insert so
+            # the row is never NULL-handle. Left untouched on conflict — a
+            # re-run of the wizard must not clobber a handle the user has since
+            # customised via the §public-handle editor.
+            external.username,
         ),
     )

@@ -368,6 +368,9 @@ async def test_provision_admin_seeds_user_when_empty(db, adapter):
     u = await db.fetchone("SELECT * FROM users WHERE username='admin'")
     assert u is not None
     assert u["is_admin"] == 1
+    # The public ``@handle`` seeds from the username so the row is never
+    # NULL-handle (the §public-handle editor pre-fills + lets the user save).
+    assert u["handle"] == "admin"
     assert StandaloneAdapter._verify_password("secret123", pu["password_hash"])
 
 
