@@ -65,7 +65,7 @@ export function UsernameEditor() {
     error.value = null
     saving.value = true
     try {
-      const res = await api.post('me/username', { username: trimmed }) as
+      const res = await api.post('/api/me/username', { username: trimmed }) as
         { username: string }
       const next = res.username ?? trimmed
       value.value = next

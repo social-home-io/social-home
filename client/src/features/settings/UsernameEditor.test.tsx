@@ -105,7 +105,7 @@ describe('UsernameEditor — manual user', () => {
     fireEvent.input(input, { target: { value: '  bob  ' } })
     fireEvent.click(getByText('Save'))
     await waitFor(() => {
-      expect(mockPost).toHaveBeenCalledWith('me/username', { username: 'bob' })
+      expect(mockPost).toHaveBeenCalledWith('/api/me/username', { username: 'bob' })
     })
   })
 
