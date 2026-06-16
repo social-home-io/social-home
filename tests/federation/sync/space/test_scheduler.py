@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,7 +16,10 @@ from socialhome.domain.space import (
     SpaceFeatures,
     SpaceType,
 )
-from socialhome.federation.sync.space.scheduler import SpaceSyncScheduler
+from socialhome.federation.sync.space.scheduler import (
+    STALE_SESSION_TTL_SECONDS,
+    SpaceSyncScheduler,
+)
 from socialhome.infrastructure.event_bus import EventBus
 from socialhome.infrastructure.reconnect_queue import ReconnectSyncQueue
 
@@ -87,7 +91,16 @@ def queue():
     return ReconnectSyncQueue(concurrency=2)
 
 
-async def test_on_pairing_confirmed_enqueues_for_shared_spaces(bus, queue):
+@pytest.fixture
+def sync_manager():
+    mgr = MagicMock()
+    mgr.reap_stale = MagicMock(return_value=0)
+    return mgr
+
+
+async def test_on_pairing_confirmed_enqueues_for_shared_spaces(
+    bus, queue, sync_manager
+):
     fed = _FakeFederation()
     spaces = {SpaceType.HOUSEHOLD: [_space("sp-1"), _space("sp-2")]}
     # The new peer is only a member of sp-1.
@@ -102,6 +115,7 @@ async def test_on_pairing_confirmed_enqueues_for_shared_spaces(bus, queue):
         ),
         queue=queue,
         own_instance_id="self",
+        sync_manager=sync_manager,
     )
     sched.wire()
     await queue.start()
@@ -118,7 +132,7 @@ async def test_on_pairing_confirmed_enqueues_for_shared_spaces(bus, queue):
     assert beg[0]["space_id"] == "sp-1"
 
 
-async def test_on_pairing_confirmed_ignores_self(bus, queue):
+async def test_on_pairing_confirmed_ignores_self(bus, queue, sync_manager):
     fed = _FakeFederation()
     sched = SpaceSyncScheduler(
         bus=bus,
@@ -130,6 +144,7 @@ async def test_on_pairing_confirmed_ignores_self(bus, queue):
         ),
         queue=queue,
         own_instance_id="self",
+        sync_manager=sync_manager,
     )
     sched.wire()
     await queue.start()
@@ -141,7 +156,7 @@ async def test_on_pairing_confirmed_ignores_self(bus, queue):
     assert fed.sent == []
 
 
-async def test_enqueue_sync_for_space_sends_begin(bus, queue):
+async def test_enqueue_sync_for_space_sends_begin(bus, queue, sync_manager):
     fed = _FakeFederation()
     sched = SpaceSyncScheduler(
         bus=bus,
@@ -153,6 +168,7 @@ async def test_enqueue_sync_for_space_sends_begin(bus, queue):
         ),
         queue=queue,
         own_instance_id="self",
+        sync_manager=sync_manager,
     )
     await queue.start()
     try:
@@ -170,7 +186,9 @@ async def test_enqueue_sync_for_space_sends_begin(bus, queue):
     assert fed.sent[0]["payload"]["prefer_direct"] is True
 
 
-async def test_periodic_tick_enqueues_for_every_confirmed_peer(bus, queue):
+async def test_periodic_tick_enqueues_for_every_confirmed_peer(
+    bus, queue, sync_manager
+):
     fed = _FakeFederation()
     # Two confirmed peers, one shared space.
     spaces = {SpaceType.HOUSEHOLD: [_space("sp-1")]}
@@ -185,6 +203,7 @@ async def test_periodic_tick_enqueues_for_every_confirmed_peer(bus, queue):
         ),
         queue=queue,
         own_instance_id="self",
+        sync_manager=sync_manager,
     )
     await queue.start()
     try:
@@ -197,7 +216,7 @@ async def test_periodic_tick_enqueues_for_every_confirmed_peer(bus, queue):
     assert {s["to"] for s in beg} == {"peer-a", "peer-b"}
 
 
-async def test_start_stop_idempotent(bus, queue):
+async def test_start_stop_idempotent(bus, queue, sync_manager):
     sched = SpaceSyncScheduler(
         bus=bus,
         federation=_FakeFederation(),
@@ -205,8 +224,52 @@ async def test_start_stop_idempotent(bus, queue):
         space_repo=_FakeSpaceRepo(spaces_by_type={}, members_by_space={}),
         queue=queue,
         own_instance_id="self",
+        sync_manager=sync_manager,
     )
     await sched.start()
     await sched.start()  # second call is a no-op
     await sched.stop()
     await sched.stop()  # second call is a no-op
+
+
+async def test_tick_reaps_stale_sync_sessions(bus, queue, sync_manager):
+    """The periodic tick drives the sync-session TTL reaper backstop."""
+    sched = SpaceSyncScheduler(
+        bus=bus,
+        federation=_FakeFederation(),
+        federation_repo=_FakeFedRepo([]),
+        space_repo=_FakeSpaceRepo(spaces_by_type={}, members_by_space={}),
+        queue=queue,
+        own_instance_id="self",
+        sync_manager=sync_manager,
+    )
+    await sched._tick_once()
+    sync_manager.reap_stale.assert_called_once_with(STALE_SESSION_TTL_SECONDS)
+
+
+async def test_tick_survives_reaper_exception(bus, queue, sync_manager):
+    """A reaper error never kills the tick — the sync enqueue work still runs."""
+    sync_manager.reap_stale.side_effect = RuntimeError("boom")
+    fed = _FakeFederation()
+    spaces = {SpaceType.HOUSEHOLD: [_space("sp-1")]}
+    members = {"sp-1": ["peer-a"]}
+    sched = SpaceSyncScheduler(
+        bus=bus,
+        federation=fed,
+        federation_repo=_FakeFedRepo([_peer("peer-a")]),
+        space_repo=_FakeSpaceRepo(
+            spaces_by_type=spaces,
+            members_by_space=members,
+        ),
+        queue=queue,
+        own_instance_id="self",
+        sync_manager=sync_manager,
+    )
+    await queue.start()
+    try:
+        await sched._tick_once()
+        await asyncio.sleep(0.05)
+    finally:
+        await queue.stop()
+    beg = [s for s in fed.sent if s["type"] == FederationEventType.SPACE_SYNC_BEGIN]
+    assert {s["to"] for s in beg} == {"peer-a"}

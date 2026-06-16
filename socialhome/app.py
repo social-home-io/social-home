@@ -902,6 +902,7 @@ def _wire_federation_stack(
         federation_repo=federation_repo,
         space_repo=space_repo,
         queue=reconnect_queue,
+        sync_manager=sync_manager,
         own_instance_id=identity.instance_id,
     )
     space_sync_scheduler.wire()

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from unittest.mock import MagicMock
 
 from socialhome.domain.federation import (
     FederationEventType,
@@ -596,3 +598,59 @@ def test_register_requester_https_session_fresh_id_returns_true():
         )
         is True
     )
+
+
+# ─── reap_stale (TTL backstop for leaked sessions) ─────────────────────────
+
+
+def test_reap_stale_closes_session_older_than_ttl():
+    """A session whose created_at predates the TTL is reaped."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    mgr.register_requester_https_session(
+        sync_id="old",
+        space_id="sp-1",
+        requester_instance_id="me",
+        provider_instance_id="host",
+    )
+    rec = mgr.get_session("old")
+    assert rec is not None
+    ttl = 1800.0
+    created = time.time() - ttl - 1
+    rec.created_at = created
+    n = mgr.reap_stale(ttl)
+    assert n == 1
+    assert mgr.get_session("old") is None
+
+
+def test_reap_stale_keeps_fresh_session_within_ttl():
+    """A session created within the TTL window survives the reap."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    mgr.register_requester_https_session(
+        sync_id="fresh",
+        space_id="sp-1",
+        requester_instance_id="me",
+        provider_instance_id="host",
+    )
+    n = mgr.reap_stale(1800.0)
+    assert n == 0
+    assert mgr.get_session("fresh") is not None
+
+
+def test_reap_stale_tears_down_rtc_handle_via_close_session():
+    """Reaping goes through close_session, so an rtc handle is closed
+    (not just dropped from the dict)."""
+    mgr = SyncSessionManager(_FakeFedRepo())
+    mgr.register_requester_https_session(
+        sync_id="with-rtc",
+        space_id="sp-1",
+        requester_instance_id="me",
+        provider_instance_id="host",
+    )
+    rec = mgr.get_session("with-rtc")
+    assert rec is not None
+    fake_rtc = MagicMock()
+    rec.rtc = fake_rtc
+    n = mgr.reap_stale(1800.0, now=rec.created_at + 1800.0 + 1)
+    assert n == 1
+    fake_rtc.close.assert_called_once()
+    assert mgr.get_session("with-rtc") is None

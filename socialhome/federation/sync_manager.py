@@ -186,6 +186,28 @@ class SyncSessionManager:
         if sess.rtc is not None:
             sess.rtc.close()
 
+    def reap_stale(self, ttl_seconds: float, *, now: float | None = None) -> int:
+        """Close sessions older than ``ttl_seconds`` (by ``created_at``).
+
+        A safety backstop for sessions that never reach an explicit
+        close — a sync stalls mid-stream, the peer vanishes, or a
+        completion signal is missed. ``ttl_seconds`` is generous (well
+        beyond any real sync duration), so this only reaps genuinely
+        abandoned sessions. Returns the number reaped. Uses
+        :meth:`close_session` for each so rtc handles / watcher tasks are
+        torn down, not just dropped from the dict.
+        """
+        current = now if now is not None else time.time()
+        # Snapshot before iterating — close_session mutates _sessions.
+        reaped = 0
+        for sync_id, record in list(self._sessions.items()):
+            if current - record.created_at > ttl_seconds:
+                self.close_session(sync_id)
+                reaped += 1
+        if reaped:
+            log.info("sync-manager: reaped %d stale session(s)", reaped)
+        return reaped
+
     # ─── S-6: rate limit ──────────────────────────────────────────────────
 
     def check_sync_begin_rate(
