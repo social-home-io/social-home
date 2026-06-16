@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 )
 from cryptography.hazmat.primitives import serialization
 
+from .domain.move_link import MoveLink
 from .domain.user import UserIdentityAssertion
 from .utils.datetime import parse_iso8601_strict
 
@@ -347,6 +348,199 @@ def move_link_release_signed_bytes(
         + _lv(issued_at.encode("utf-8"))
         + _lv(suite.encode("utf-8"))
     )
+
+
+# ─── Move-out link build + verify (move-out link) ──────────────────────────
+
+
+class MoveLinkError(ValueError):
+    """Base for every move-out link verification failure."""
+
+
+class MoveLinkUserSigInvalid(MoveLinkError):
+    """The USER (``P``) consent signature on the link did not verify."""
+
+
+class MoveLinkReleaseSigInvalid(MoveLinkError):
+    """The old-home RELEASE consent signature on the link did not verify."""
+
+
+class MoveLinkReleaseDestinationMismatch(MoveLinkError):
+    """The release signature was issued for a different destination than the
+    one carried by this link (the destination-pin was violated).
+
+    Defined for explicit future use; today a release issued over a different
+    destination simply fails to verify against the recomputed bytes and surfaces
+    as :class:`MoveLinkReleaseSigInvalid`."""
+
+
+class MoveLinkBindingInvalid(MoveLinkError):
+    """A structural binding failed: the receiver's stored P↔old_id binding did
+    not match the link's ``P``, or the embedded new-home P↔new_id assertion was
+    invalid / inconsistent with the link's ``P``."""
+
+
+def build_move_link(
+    *,
+    user_seed: bytes,
+    user_public_key: bytes,
+    old_home_instance_seed: bytes,
+    old_user_id: str,
+    old_instance_id: str,
+    new_instance_public_key: bytes,
+    new_home_assertion: UserIdentityAssertion,
+    issued_at: str,
+    suite: str = MOVE_LINK_SUITE_ED25519,
+) -> MoveLink:
+    """Assemble a dual-signed :class:`MoveLink`.
+
+    Produces the USER consent signature (by ``P`` = ``user_seed``) and the
+    destination-pinned RELEASE signature (by the old home's instance key =
+    ``old_home_instance_seed``) over the canonical move-link bytes, both
+    committing to ``new_user_id`` (taken from ``new_home_assertion``) +
+    ``new_instance_public_key``. The two pubkeys are hex-encoded on the wire.
+    """
+    validate_move_link_suite(suite)
+    new_user_id = new_home_assertion.user_id
+
+    user_sig = b64url_encode(
+        sign_user_self(
+            user_seed,
+            move_link_user_signed_bytes(
+                old_user_id=old_user_id,
+                new_user_id=new_user_id,
+                user_public_key=user_public_key,
+                new_instance_public_key=new_instance_public_key,
+                issued_at=issued_at,
+                suite=suite,
+            ),
+        )
+    )
+    # The RELEASE signature is a raw Ed25519 INSTANCE signature over arbitrary
+    # bytes — the same primitive sign_user_assertion uses internally.
+    release_sig = b64url_encode(
+        sign_ed25519(
+            old_home_instance_seed,
+            move_link_release_signed_bytes(
+                old_user_id=old_user_id,
+                new_user_id=new_user_id,
+                user_public_key=user_public_key,
+                new_instance_public_key=new_instance_public_key,
+                issued_at=issued_at,
+                suite=suite,
+            ),
+        )
+    )
+
+    return MoveLink(
+        suite=suite,
+        user_public_key=user_public_key.hex(),
+        old_user_id=old_user_id,
+        old_instance_id=old_instance_id,
+        issued_at=issued_at,
+        new_instance_public_key=new_instance_public_key.hex(),
+        new_home_assertion=new_home_assertion,
+        user_signature=user_sig,
+        release_signature=release_sig,
+    )
+
+
+def verify_move_link(
+    link: MoveLink,
+    *,
+    old_home_pinned_pk: bytes,
+    stored_old_user_pubkey: bytes,
+    now: datetime | None = None,
+    max_age: timedelta = timedelta(days=365),
+) -> None:
+    """Verify a move-out link under DUAL CONSENT + both P-bindings.
+
+    Raises a specific :class:`MoveLinkError` subclass on each failed leg;
+    returns ``None`` on success. ``old_home_pinned_pk`` is the old home's
+    instance pubkey the receiver already pins; ``stored_old_user_pubkey`` is the
+    portable ``P`` the receiver already stored for ``old_user_id``.
+    """
+    # 1. Suite — no default fallback (downgrade protection).
+    validate_move_link_suite(link.suite)
+
+    # 2. Decode the relayed key material.
+    try:
+        link_pubkey = bytes.fromhex(link.user_public_key)
+        new_inst_pk = bytes.fromhex(link.new_instance_public_key)
+    except ValueError as exc:
+        raise MoveLinkBindingInvalid("malformed move-link key material") from exc
+
+    # 3. Binding #3 — P↔old_id (the binding the receiver already stores) and the
+    #    pinned old-home instance key must match the link's old_instance_id.
+    if link_pubkey != stored_old_user_pubkey:
+        raise MoveLinkBindingInvalid("link P does not match stored old-home P")
+    if derive_instance_id(old_home_pinned_pk) != link.old_instance_id:
+        raise MoveLinkBindingInvalid(
+            "pinned old-home key does not match link.old_instance_id"
+        )
+
+    # 4. Binding #4 — P↔new_id, verified against the relayed new-home instance
+    #    pubkey, and the embedded assertion must bind the SAME P.
+    if derive_instance_id(new_inst_pk) != link.new_home_assertion.instance_id:
+        raise MoveLinkBindingInvalid(
+            "new-home instance key does not match the embedded assertion"
+        )
+    try:
+        verify_user_identity_assertion(
+            link.new_home_assertion,
+            new_inst_pk,
+            now=now,
+            max_age=timedelta(days=365),
+        )
+    except (ValueError, UnsupportedUserSigSuite) as exc:
+        raise MoveLinkBindingInvalid(f"new-home assertion invalid: {exc}") from exc
+    if (link.new_home_assertion.user_identity_public_key or "").lower() != (
+        link.user_public_key.lower()
+    ):
+        raise MoveLinkBindingInvalid("new-home assertion binds a different P")
+
+    # 5. Destination user_id is sourced from the verified embedded binding.
+    new_user_id = link.new_home_assertion.user_id
+
+    # 6. USER consent — the person (holding P) authorised this move.
+    if not verify_user_self(
+        link_pubkey,
+        move_link_user_signed_bytes(
+            old_user_id=link.old_user_id,
+            new_user_id=new_user_id,
+            user_public_key=link_pubkey,
+            new_instance_public_key=new_inst_pk,
+            issued_at=link.issued_at,
+            suite=link.suite,
+        ),
+        b64url_decode(link.user_signature),
+    ):
+        raise MoveLinkUserSigInvalid("move-link user consent signature invalid")
+
+    # 7. RELEASE consent — the old home vouched for THIS destination. A release
+    #    issued over a different destination won't verify against these
+    #    recomputed bytes (the destination-pin).
+    if not verify_ed25519(
+        old_home_pinned_pk,
+        move_link_release_signed_bytes(
+            old_user_id=link.old_user_id,
+            new_user_id=new_user_id,
+            user_public_key=link_pubkey,
+            new_instance_public_key=new_inst_pk,
+            issued_at=link.issued_at,
+            suite=link.suite,
+        ),
+        b64url_decode(link.release_signature),
+    ):
+        raise MoveLinkReleaseSigInvalid("move-link release consent signature invalid")
+
+    # 8. Freshness — reject a link older than max_age (one-directional: a
+    #    future-dated link is fine, the new-home assertion gate above already
+    #    bounds clock skew).
+    issued = parse_iso8601_strict(link.issued_at)
+    current = now if now is not None else datetime.now(timezone.utc)
+    if (current - issued).total_seconds() > max_age.total_seconds():
+        raise MoveLinkError("move-link is older than max_age")
 
 
 # ─── UserIdentityAssertion encoding (§4.1.4) ──────────────────────────────

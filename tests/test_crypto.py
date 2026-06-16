@@ -13,11 +13,17 @@ from socialhome.crypto import (
     SUPPORTED_MOVE_LINK_SUITES,
     SUPPORTED_USER_SIG_SUITES,
     USER_SIG_SUITE_ED25519,
+    MoveLinkBindingInvalid,
+    MoveLinkError,
+    MoveLinkReleaseDestinationMismatch,
+    MoveLinkReleaseSigInvalid,
+    MoveLinkUserSigInvalid,
     ReplayCache,
     UnsupportedMoveLinkSuite,
     UnsupportedUserSigSuite,
     b64url_decode,
     b64url_encode,
+    build_move_link,
     build_user_identity_assertion,
     derive_instance_id,
     derive_user_id,
@@ -36,6 +42,7 @@ from socialhome.crypto import (
     validate_move_link_suite,
     validate_user_sig_suite,
     verify_ed25519,
+    verify_move_link,
     verify_user_identity_assertion,
     verify_user_self,
     x25519_exchange,
@@ -780,3 +787,217 @@ def test_move_link_user_and_release_bytes_differ_for_identical_params():
     can never be cross-replayed, even over identical params."""
     args = _move_link_byte_args()
     assert move_link_user_signed_bytes(**args) != move_link_release_signed_bytes(**args)
+
+
+# ─── Move-out link build + verify (move-out link, Task 2) ──────────────────
+
+
+def _build_move_scenario(*, username: str = "pascal", display_name: str = "Pascal"):
+    """Mint a realistic move-out scenario and return everything a test needs.
+
+    A single portable per-user keypair ``P`` and a shared ``identity_anchor``
+    span both homes (a move is NOT a re-keying). ``old_id``/``new_id`` derive
+    from each home's instance pubkey + the anchor. The new home's P-binding
+    rides in a real ``UserIdentityAssertion`` signed by the new home.
+
+    Returns a dict of the pieces (keypairs, ids, the assembled MoveLink, the
+    verify-time inputs).
+    """
+    user_kp = generate_identity_keypair()  # portable P
+    old_home_kp = generate_identity_keypair()
+    new_home_kp = generate_identity_keypair()
+
+    anchor = "deadbeefcafef00d" * 2  # opaque uuid-like, spans both homes
+    old_instance_id = derive_instance_id(old_home_kp.public_key)
+    new_instance_id = derive_instance_id(new_home_kp.public_key)
+    old_user_id = derive_user_id(old_home_kp.public_key, anchor)
+    new_user_id = derive_user_id(new_home_kp.public_key, anchor)
+    issued = datetime.now(timezone.utc).isoformat()
+
+    new_home_assertion = build_user_identity_assertion(
+        instance_seed=new_home_kp.private_key,
+        user_id=new_user_id,
+        instance_id=new_instance_id,
+        username=username,
+        display_name=display_name,
+        issued_at=issued,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+
+    link = build_move_link(
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        old_home_instance_seed=old_home_kp.private_key,
+        old_user_id=old_user_id,
+        old_instance_id=old_instance_id,
+        new_instance_public_key=new_home_kp.public_key,
+        new_home_assertion=new_home_assertion,
+        issued_at=issued,
+    )
+    return {
+        "user_kp": user_kp,
+        "old_home_kp": old_home_kp,
+        "new_home_kp": new_home_kp,
+        "anchor": anchor,
+        "old_user_id": old_user_id,
+        "new_user_id": new_user_id,
+        "link": link,
+    }
+
+
+def test_verify_move_link_accepts_well_formed_link():
+    """A link built by build_move_link verifies under dual consent + bindings."""
+    s = _build_move_scenario()
+    # Does not raise -> user sig, release sig, and both bindings verify.
+    verify_move_link(
+        s["link"],
+        old_home_pinned_pk=s["old_home_kp"].public_key,
+        stored_old_user_pubkey=s["user_kp"].public_key,
+    )
+
+
+def test_verify_move_link_forged_user_signature_rejected():
+    """A tampered user_signature fails the USER-consent leg."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], user_signature=b64url_encode(b"\x00" * 64))
+    with pytest.raises(MoveLinkUserSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_forged_release_signature_rejected():
+    """A tampered release_signature fails the old-home RELEASE-consent leg."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], release_signature=b64url_encode(b"\x00" * 64))
+    with pytest.raises(MoveLinkReleaseSigInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_release_resigned_for_other_destination_rejected():
+    """A release signed over a DIFFERENT destination, spliced onto the original
+    link, fails: the recomputed release bytes commit to this link's destination
+    so the foreign release doesn't verify (destination-pin)."""
+    s = _build_move_scenario()
+    other = _build_move_scenario()  # a different new home + new_user_id
+    # Splice the foreign release sig onto the original link (everything else,
+    # including the original destination, stays).
+    spliced = dataclasses.replace(
+        s["link"], release_signature=other["link"].release_signature
+    )
+    with pytest.raises((MoveLinkReleaseSigInvalid, MoveLinkReleaseDestinationMismatch)):
+        verify_move_link(
+            spliced,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_stored_old_user_pubkey_mismatch_rejected():
+    """If the receiver's stored P for old_user_id != the link's P, reject:
+    binding #3 (P↔old_id) fails."""
+    s = _build_move_scenario()
+    wrong = generate_identity_keypair()
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            s["link"],
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=wrong.public_key,
+        )
+
+
+def test_verify_move_link_tampered_new_home_assertion_rejected():
+    """A corrupted embedded new_home_assertion (instance signature broken)
+    fails binding #4."""
+    s = _build_move_scenario()
+    tampered_assertion = dataclasses.replace(
+        s["link"].new_home_assertion,
+        signature=b64url_encode(b"\x00" * 64),
+    )
+    bad = dataclasses.replace(s["link"], new_home_assertion=tampered_assertion)
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_new_home_assertion_binds_different_p_rejected():
+    """If the embedded assertion binds a P different from the link's P, reject:
+    the P↔new_id binding is inconsistent with the link's portable key."""
+    s = _build_move_scenario()
+    other_p = generate_identity_keypair()
+    tampered_assertion = dataclasses.replace(
+        s["link"].new_home_assertion,
+        user_identity_public_key=other_p.public_key.hex(),
+    )
+    bad = dataclasses.replace(s["link"], new_home_assertion=tampered_assertion)
+    with pytest.raises(MoveLinkBindingInvalid):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_unknown_suite_rejected():
+    """An unknown move-link suite is rejected with no default fallback."""
+    s = _build_move_scenario()
+    bad = dataclasses.replace(s["link"], suite="ed25519+mldsa65")
+    with pytest.raises(UnsupportedMoveLinkSuite):
+        verify_move_link(
+            bad,
+            old_home_pinned_pk=s["old_home_kp"].public_key,
+            stored_old_user_pubkey=s["user_kp"].public_key,
+        )
+
+
+def test_verify_move_link_stale_link_rejected():
+    """A link older than max_age is rejected on the freshness gate."""
+    s = _build_move_scenario()
+    way_back = (datetime.now(timezone.utc) - timedelta(days=800)).isoformat()
+    # Rebuild a fully-consistent but old link so it fails ONLY on freshness.
+    user_kp = s["user_kp"]
+    old_home_kp = s["old_home_kp"]
+    new_home_kp = s["new_home_kp"]
+    anchor = s["anchor"]
+    new_instance_id = derive_instance_id(new_home_kp.public_key)
+    new_user_id = derive_user_id(new_home_kp.public_key, anchor)
+    old_instance_id = derive_instance_id(old_home_kp.public_key)
+    old_user_id = derive_user_id(old_home_kp.public_key, anchor)
+    stale_assertion = build_user_identity_assertion(
+        instance_seed=new_home_kp.private_key,
+        user_id=new_user_id,
+        instance_id=new_instance_id,
+        username="pascal",
+        display_name="Pascal",
+        issued_at=way_back,
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        identity_anchor=anchor,
+    )
+    stale_link = build_move_link(
+        user_seed=user_kp.private_key,
+        user_public_key=user_kp.public_key,
+        old_home_instance_seed=old_home_kp.private_key,
+        old_user_id=old_user_id,
+        old_instance_id=old_instance_id,
+        new_instance_public_key=new_home_kp.public_key,
+        new_home_assertion=stale_assertion,
+        issued_at=way_back,
+    )
+    with pytest.raises(MoveLinkError):
+        verify_move_link(
+            stale_link,
+            old_home_pinned_pk=old_home_kp.public_key,
+            stored_old_user_pubkey=user_kp.public_key,
+        )
