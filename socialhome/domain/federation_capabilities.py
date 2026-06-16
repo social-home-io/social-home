@@ -394,7 +394,16 @@ from __future__ import annotations
 #:   Per-user surface, not space-scoped — its lag affects only the two
 #:   households exchanging the user roster, so it is deliberately kept out
 #:   of the per-space compatibility banner.
-OURS: int = 26
+#: * **v_27** (2026-06-16) — move-out link: :data:`FederationEventType.USER_MOVED`
+#:   (old-home push of a dual-consent move-link) + :data:`USER_IDENTITY_RESOLVE`
+#:   (pull backstop) redirect ``old_id@old_home`` → ``new_id@new_home``; the
+#:   ``user_id`` stays household-scoped. Senders gate the push / resolve on
+#:   :data:`FederationCapability.MIN_FOR_USER_MOVE`. **Best-effort.** Older peer
+#:   fallback: not pushed / can't resolve → keeps the stale contact (no data
+#:   loss, no auto-follow). Per-user surface, not space-scoped — its lag affects
+#:   only the households tracking the moved user, so it is deliberately kept out
+#:   of the per-space compatibility banner.
+OURS: int = 27
 
 
 class FederationCapability:
@@ -628,6 +637,18 @@ class FederationCapability:
     #: excluded from the per-space compatibility banner.
     MIN_FOR_IDENTITY_ANCHOR = 26
 
+    #: Minimum proto_version where the peer accepts the move-out link —
+    #: :data:`FederationEventType.USER_MOVED` (old-home push of a dual-consent
+    #: move-link) and :data:`USER_IDENTITY_RESOLVE` (pull backstop) that redirect
+    #: ``old_id@old_home`` → ``new_id@new_home`` while ``user_id`` stays
+    #: household-scoped. The sender gates the push / resolve on this; a sub-v_27
+    #: peer is not pushed (and can't resolve), so it keeps the stale contact (no
+    #: data loss, no auto-follow) — best-effort. Per-user surface (not
+    #: space-scoped): its lag affects only the households tracking the moved
+    #: user, so it is intentionally excluded from the per-space compatibility
+    #: banner.
+    MIN_FOR_USER_MOVE = 27
+
     # v_4 (§11 pairing-via-inbox) intentionally has no named constant
     # here. Capability exchange happens *after* pairing completes, so
     # there is no point in the codepath where ``peer_supports(...,
@@ -687,6 +708,10 @@ CAPABILITY_FEATURES: list[tuple[int, str]] = [
     (
         FederationCapability.MIN_FOR_IDENTITY_ANCHOR,
         "UUID identity anchor",
+    ),
+    (
+        FederationCapability.MIN_FOR_USER_MOVE,
+        "User move-out link",
     ),
 ]
 
