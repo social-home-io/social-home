@@ -107,7 +107,13 @@ async def test_stream_initial_uses_https_when_session_marked(provider):
     provider MUST ship chunks as ``SPACE_SYNC_CHUNK`` federation
     events through the attached federation service instead of trying
     the absent DataChannel. Before this fix relay-mode sync accepted
-    the session and then did nothing."""
+    the session and then did nothing.
+
+    The send rides ``send_with_mesh_fallback`` (not bare ``send_event``)
+    so a mesh-only requester — a member that joined over a MESH route
+    and isn't a confirmed direct peer — receives the chunks via
+    ``SPACE_ROUTED``; a confirmed peer still gets the direct path
+    internally."""
     from unittest.mock import AsyncMock
 
     session = _FakeSession()
@@ -119,9 +125,9 @@ async def test_stream_initial_uses_https_when_session_marked(provider):
 
     await provider.stream_initial(session)
 
-    # Every chunk + the sentinel travels via send_event.
-    assert federation.send_event.await_count >= 3
-    first_call = federation.send_event.await_args_list[0]
+    # Every chunk + the sentinel travels via the mesh-fallback path.
+    assert federation.send_with_mesh_fallback.await_count >= 3
+    first_call = federation.send_with_mesh_fallback.await_args_list[0]
     assert first_call.kwargs["event_type"].value == "space_sync_chunk"
     assert first_call.kwargs["to_instance_id"] == session.requester_instance_id
     assert first_call.kwargs["space_id"] == session.space_id
